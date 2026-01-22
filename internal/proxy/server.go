@@ -75,9 +75,7 @@ func (s *Server) Start() error {
 // startDownloadFromURL is used by the API to start a task without a player
 func (s *Server) startDownloadFromURL(rawURL string) error {
 	// Check if task exists (for idempotency and recursive calls)
-	taskID := cache.GetTaskID(rawURL)
-
-	exists, status, err := s.taskManager.CheckTaskExists(taskID)
+	exists, status, err := s.taskManager.CheckTaskExists(cache.GetTaskID(rawURL))
 	if err != nil {
 		return err
 	}
@@ -132,18 +130,17 @@ func (s *Server) startDownloadFromURL(rawURL string) error {
 
 	if type_ == playlist.Variant {
 		taskID := cache.GetTaskID(rawURL)
-		cache.EnsureTaskDir(taskID)
-
 		// Save Metadata
 		mediaPl := pl.(*m3u8.MediaPlaylist)
 		// We use a dummy proxy base since we are just downloading
-		// Ideally we should use the actual proxy port if known, but localhost/proxy is just a placeholder here
-		// unless the saved content is used for playback.
-		// NOTE: 'updated' string from RewriteVariant with "http://localhost/proxy" might be broken for playback
-		// if the player connects to localhost:8080.
-		// FIX: Use config port to make it usable.
 		proxyBase := fmt.Sprintf("http://localhost:%d/proxy", config.GlobalConfig.ProxyPort)
 		updated, items, total := playlist.RewriteVariant(mediaPl, proxyBase, taskID, base)
+
+		// Create task directory
+		creatDirErr := cache.EnsureTaskDir(taskID)
+		if creatDirErr != nil {
+			return fmt.Errorf("failed to create task directory: %v", creatDirErr)
+		}
 
 		meta := task.TaskMetadata{
 			ID:             taskID,
@@ -154,8 +151,8 @@ func (s *Server) startDownloadFromURL(rawURL string) error {
 			ProxiedContent: updated,
 		}
 		// Use DB instead of file
-		if err := s.taskManager.CreateTask(meta); err != nil {
-			return err
+		if taskErr := s.taskManager.CreateTask(meta); taskErr != nil {
+			return taskErr
 		}
 
 		s.triggerDownloads(taskID, items)
