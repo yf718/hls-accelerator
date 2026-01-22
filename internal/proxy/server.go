@@ -163,96 +163,161 @@ func (s *Server) startDownloadFromURL(rawURL string) error {
 	return nil
 }
 
-func (s *Server) handleM3U8(w http.ResponseWriter, r *http.Request) {
-	// Path: /proxy/m3u8/{encoded_url}
-	encodedURL := strings.TrimPrefix(r.URL.Path, "/proxy/m3u8/")
-	originURL, err := url.QueryUnescape(encodedURL)
+// setM3U8Headers sets common headers for M3U8 responses
+func (s *Server) setM3U8Headers(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+}
+
+// writeM3U8Response writes M3U8 content to response with proper headers
+func (s *Server) writeM3U8Response(w http.ResponseWriter, content string) {
+	s.setM3U8Headers(w)
+	w.Write([]byte(content))
+}
+
+// fetchUpstreamM3U8 fetches M3U8 content from upstream server
+func (s *Server) fetchUpstreamM3U8(originURL string) (*http.Response, error) {
+	req, err := http.NewRequest("GET", originURL, nil)
 	if err != nil {
-		http.Error(w, "Invalid URL encoding", http.StatusBadRequest)
-		return
+		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
-	// Optimization: Check DB first to avoid unnecessary upstream requests
-	taskID := cache.GetTaskID(originURL)
-	if content, err := s.taskManager.GetTaskProxiedContent(taskID); err == nil && content != "" {
-		w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Write([]byte(content))
-		return
-	}
-
-	// Fetch
-	req, _ := http.NewRequest("GET", originURL, nil)
+	// Set custom headers
 	for k, v := range config.GlobalConfig.Headers {
 		req.Header.Set(k, v)
 	}
 
 	resp, err := s.client.Do(req)
 	if err != nil {
+		return nil, fmt.Errorf("failed to fetch upstream: %w", err)
+	}
+
+	// Check HTTP status code
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		resp.Body.Close()
+		return nil, fmt.Errorf("upstream returned bad status: %d", resp.StatusCode)
+	}
+
+	return resp, nil
+}
+
+func (s *Server) handleM3U8(w http.ResponseWriter, r *http.Request) {
+	// Path: /proxy/m3u8/{encoded_url}
+	encodedURL := strings.TrimPrefix(r.URL.Path, "/proxy/m3u8/")
+	if encodedURL == "" {
+		http.Error(w, "Missing URL parameter", http.StatusBadRequest)
+		return
+	}
+
+	originURL, err := url.QueryUnescape(encodedURL)
+	if err != nil {
+		http.Error(w, "Invalid URL encoding", http.StatusBadRequest)
+		return
+	}
+
+	// Validate origin URL
+	parsedURL, err := url.Parse(originURL)
+	if err != nil {
+		http.Error(w, "Invalid URL format", http.StatusBadRequest)
+		return
+	}
+	if parsedURL.Scheme == "" || parsedURL.Host == "" {
+		http.Error(w, "Invalid URL: missing scheme or host", http.StatusBadRequest)
+		return
+	}
+
+	// Calculate taskID once (used for both cache check and task management)
+	taskID := cache.GetTaskID(originURL)
+
+	// Optimization: Check DB first to avoid unnecessary upstream requests
+	if content, err := s.taskManager.GetTaskProxiedContent(taskID); err == nil && content != "" {
+		s.writeM3U8Response(w, content)
+		return
+	}
+
+	// Fetch from upstream
+	resp, err := s.fetchUpstreamM3U8(originURL)
+	if err != nil {
+		log.Printf("Failed to fetch M3U8 from %s: %v", originURL, err)
 		http.Error(w, "Failed to fetch upstream", http.StatusBadGateway)
 		return
 	}
 	defer resp.Body.Close()
 
-	// Parse
-	base, _ := url.Parse(originURL)
-	pl, type_, err := playlist.Parse(resp.Body)
+	// Parse M3U8 playlist
+	pl, playlistType, err := playlist.Parse(resp.Body)
 	if err != nil {
+		log.Printf("Failed to parse M3U8 from %s: %v", originURL, err)
 		http.Error(w, "Failed to parse m3u8", http.StatusBadGateway)
 		return
 	}
 
 	proxyBase := fmt.Sprintf("http://%s/proxy", r.Host)
 
-	if type_ == playlist.Master {
-		masterPl := pl.(*m3u8.MasterPlaylist)
-		updated := playlist.RewriteMaster(masterPl, proxyBase, base)
+	// Handle based on playlist type
+	switch playlistType {
+	case playlist.Master:
+		s.handleMasterPlaylist(w, pl.(*m3u8.MasterPlaylist), proxyBase, parsedURL)
+	case playlist.Variant:
+		s.handleVariantPlaylist(w, r, pl.(*m3u8.MediaPlaylist), proxyBase, parsedURL, originURL, taskID)
+	default:
+		http.Error(w, "Unknown playlist type", http.StatusBadGateway)
+	}
+}
 
-		w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Write([]byte(updated))
+// handleMasterPlaylist processes and returns a master playlist
+func (s *Server) handleMasterPlaylist(w http.ResponseWriter, masterPl *m3u8.MasterPlaylist, proxyBase string, baseURL *url.URL) {
+	updated := playlist.RewriteMaster(masterPl, proxyBase, baseURL)
+	s.writeM3U8Response(w, updated)
+}
+
+// handleVariantPlaylist processes a variant playlist and manages download tasks
+func (s *Server) handleVariantPlaylist(w http.ResponseWriter, r *http.Request, mediaPl *m3u8.MediaPlaylist, proxyBase string, baseURL *url.URL, originURL, taskID string) {
+	// Ensure cache directory exists
+	if err := cache.EnsureTaskDir(taskID); err != nil {
+		log.Printf("Failed to create task directory for %s: %v", taskID, err)
+		http.Error(w, "Failed to initialize cache", http.StatusInternalServerError)
 		return
 	}
 
-	if type_ == playlist.Variant {
-		taskID := cache.GetTaskID(originURL)
-		cache.EnsureTaskDir(taskID)
+	// Rewrite playlist and get download items
+	updated, items, total := playlist.RewriteVariant(mediaPl, proxyBase, taskID, baseURL)
 
-		mediaPl := pl.(*m3u8.MediaPlaylist)
-		updated, items, total := playlist.RewriteVariant(mediaPl, proxyBase, taskID, base)
-
-		// Check if task exists to prevent overwriting progress
-		shouldStartTask := true
-		exists, status, _ := s.taskManager.CheckTaskExists(taskID)
-		if exists && (status == "downloading" || status == "completed") {
-			shouldStartTask = false
-			// Task exists but no content in DB? We should update it.
-			go s.taskManager.UpdateTaskProxiedContent(taskID, updated)
-		}
-
-		if shouldStartTask {
-			// Save/Update Metadata (Player triggered)
-			go func() {
-				meta := task.TaskMetadata{
-					ID:             taskID,
-					OriginalURL:    originURL,
-					TotalSegments:  total,
-					CreatedTime:    time.Now(),
-					Status:         "downloading",
-					ProxiedContent: updated,
-				}
-				s.taskManager.CreateTask(meta)
-			}()
-
-			// Trigger Downloads
-			go s.triggerDownloads(taskID, items)
-		}
-
-		w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Write([]byte(updated))
-		return
+	// Check if task already exists
+	exists, status, err := s.taskManager.CheckTaskExists(taskID)
+	if err != nil {
+		log.Printf("Failed to check task existence for %s: %v", taskID, err)
+		// Continue anyway - we'll try to create/update
 	}
+
+	// Determine if we should start a new task
+	// If task exists and is downloading/completed, proxied content was already saved during creation
+	shouldStartNewTask := !exists || (status != "downloading" && status != "completed")
+
+	if shouldStartNewTask {
+		// Start new task asynchronously
+		go func() {
+			meta := task.TaskMetadata{
+				ID:             taskID,
+				OriginalURL:    originURL,
+				TotalSegments:  total,
+				CreatedTime:    time.Now(),
+				Status:         "downloading",
+				ProxiedContent: updated,
+			}
+			if err := s.taskManager.CreateTask(meta); err != nil {
+				log.Printf("Failed to create task %s: %v", taskID, err)
+				return
+			}
+
+			// Trigger downloads
+			s.triggerDownloads(taskID, items)
+		}()
+	}
+	// If task already exists, proxied content was saved during creation and unlikely to change
+
+	// Return rewritten playlist immediately
+	s.writeM3U8Response(w, updated)
 }
 
 // Common handler for Segments and Keys
