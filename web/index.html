@@ -1,0 +1,638 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>HLS Accelerator Manager</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-body: #0f1115;
+            --bg-card: #181b21;
+            --bg-card-hover: #1f232b;
+            --primary: #3b82f6;
+            --primary-hover: #2563eb;
+            --text-main: #e2e8f0;
+            --text-muted: #94a3b8;
+            --border: #2d3748;
+            --success: #10b981;
+            --danger: #ef4444;
+            --glass: rgba(24, 27, 33, 0.7);
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: var(--bg-body);
+            color: var(--text-main);
+            overflow-x: hidden;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        /* Layout */
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            padding-bottom: 80px;
+            /* Space for FAB */
+        }
+
+        /* Header */
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 30px;
+            padding: 10px 0;
+            border-bottom: 1px solid var(--border);
+        }
+
+        h1 {
+            font-size: 1.5rem;
+            font-weight: 700;
+            background: linear-gradient(90deg, #60a5fa, #a78bfa);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        /* Stats Cards */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 15px;
+            margin-bottom: 30px;
+        }
+
+        .stat-card {
+            background: var(--bg-card);
+            padding: 20px;
+            border-radius: 12px;
+            border: 1px solid var(--border);
+        }
+
+        .stat-value {
+            font-size: 1.8rem;
+            font-weight: 600;
+            color: var(--text-main);
+        }
+
+        .stat-label {
+            font-size: 0.85rem;
+            color: var(--text-muted);
+            margin-top: 5px;
+        }
+
+        /* Task List */
+        .task-list {
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+
+        .task-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 20px;
+            transition: all 0.2s ease;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .task-card:hover {
+            transform: translateY(-2px);
+            background: var(--bg-card-hover);
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+        }
+
+        .task-header {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 15px;
+        }
+
+        .task-title {
+            font-size: 1rem;
+            font-weight: 500;
+            color: var(--text-main);
+            word-break: break-all;
+            margin-right: 15px;
+            line-height: 1.4;
+        }
+
+        .task-meta {
+            font-size: 0.8rem;
+            color: var(--text-muted);
+            margin-top: 5px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        /* Progress Bar */
+        .progress-container {
+            height: 8px;
+            background: #2d3748;
+            border-radius: 4px;
+            overflow: hidden;
+            margin-top: 15px;
+        }
+
+        .progress-bar {
+            height: 100%;
+            background: linear-gradient(90deg, var(--primary), #a78bfa);
+            border-radius: 4px;
+            width: 0%;
+            transition: width 0.5s ease;
+        }
+
+        .progress-text {
+            font-size: 0.8rem;
+            color: var(--text-muted);
+            margin-top: 8px;
+            display: flex;
+            justify-content: space-between;
+        }
+
+        /* Actions */
+        .btn-group {
+            display: flex;
+            gap: 10px;
+            margin-top: 15px;
+            justify-content: flex-end;
+        }
+
+        .btn {
+            padding: 8px 16px;
+            border-radius: 8px;
+            font-size: 0.85rem;
+            font-weight: 500;
+            cursor: pointer;
+            border: none;
+            transition: background 0.2s;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .btn-primary {
+            background: var(--primary);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background: var(--primary-hover);
+        }
+
+        .btn-danger {
+            background: rgba(239, 68, 68, 0.15);
+            color: var(--danger);
+        }
+
+        .btn-danger:hover {
+            background: rgba(239, 68, 68, 0.25);
+        }
+
+        .btn-icon {
+            padding: 8px;
+            border-radius: 50%;
+            background: transparent;
+            color: var(--text-muted);
+            cursor: pointer;
+            border: none;
+        }
+
+        .btn-icon:hover {
+            color: var(--text-main);
+            background: rgba(255, 255, 255, 0.05);
+        }
+
+        /* Floating Action Button for Mobile */
+        .fab {
+            position: fixed;
+            bottom: 30px;
+            right: 30px;
+            width: 56px;
+            height: 56px;
+            border-radius: 28px;
+            background: var(--primary);
+            color: white;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.3);
+            border: none;
+            cursor: pointer;
+            font-size: 24px;
+            transition: transform 0.2s;
+            z-index: 100;
+        }
+
+        .fab:hover {
+            transform: scale(1.05);
+            background: var(--primary-hover);
+        }
+
+        /* Modal */
+        .modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.7);
+            backdrop-filter: blur(4px);
+            display: none;
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+            padding: 20px;
+        }
+
+        .modal {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 24px;
+            width: 100%;
+            max-width: 500px;
+            box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.3);
+            animation: modalSlide 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        @keyframes modalSlide {
+            from {
+                transform: translateY(20px);
+                opacity: 0;
+            }
+
+            to {
+                transform: translateY(0);
+                opacity: 1;
+            }
+        }
+
+        .modal-title {
+            font-size: 1.25rem;
+            font-weight: 600;
+            margin-bottom: 20px;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        .form-label {
+            display: block;
+            margin-bottom: 8px;
+            font-size: 0.9rem;
+            color: var(--text-muted);
+        }
+
+        .form-input {
+            width: 100%;
+            padding: 12px;
+            background: rgba(0, 0, 0, 0.2);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            color: var(--text-main);
+            font-size: 1rem;
+        }
+
+        .form-input:focus {
+            outline: none;
+            border-color: var(--primary);
+        }
+
+        .modal-actions {
+            display: flex;
+            justify-content: flex-end;
+            gap: 12px;
+        }
+
+        /* Responsive */
+        @media (max-width: 600px) {
+            .container {
+                padding: 15px;
+            }
+
+            .task-header {
+                flex-direction: column;
+                gap: 10px;
+            }
+
+            .stat-value {
+                font-size: 1.5rem;
+            }
+
+            .btn-group {
+                width: 100%;
+                justify-content: space-between;
+            }
+
+            .btn {
+                flex: 1;
+                justify-content: center;
+            }
+        }
+
+        /* Toast */
+        .toast {
+            position: fixed;
+            top: 30px;
+            left: 50%;
+            transform: translateX(-50%) translateY(-150%);
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            color: var(--text-main);
+            padding: 12px 24px;
+            border-radius: 50px;
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.4);
+            transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+            z-index: 99999;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .toast.show {
+            transform: translateX(-50%) translateY(0);
+        }
+    </style>
+</head>
+
+<body>
+
+    <div class="container">
+        <header>
+            <h1>HLS Accelerator</h1>
+            <button class="btn-icon" id="btn-refresh" title="Refresh">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M23 4v6h-6"></path>
+                    <path d="M1 20v-6h6"></path>
+                    <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+                </svg>
+            </button>
+        </header>
+
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-value" id="stat-active">0</div>
+                <div class="stat-label">Active Tasks</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="stat-storage">0 MB</div>
+                <div class="stat-label">Total Cache</div>
+            </div>
+        </div>
+
+        <div class="task-list" id="task-list">
+            <!-- Tasks will be injected here -->
+        </div>
+    </div>
+
+    <button class="fab" id="btn-add">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="12" y1="5" x2="12" y2="19"></line>
+            <line x1="5" y1="12" x2="19" y2="12"></line>
+        </svg>
+    </button>
+
+    <!-- Add Task Modal -->
+    <div class="modal-overlay" id="add-modal">
+        <div class="modal">
+            <h2 class="modal-title">New Task</h2>
+            <div class="form-group">
+                <label class="form-label">M3U8 URL</label>
+                <input type="text" class="form-input" id="input-url" placeholder="https://example.com/video.m3u8">
+            </div>
+            <div class="modal-actions">
+                <button class="btn" style="background:transparent; color: var(--text-muted)"
+                    id="btn-cancel">Cancel</button>
+                <button class="btn btn-primary" id="btn-submit">Start Download</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="toast" id="toast">
+        <span id="toast-msg">Operation successful</span>
+    </div>
+
+    <script>
+        const API_BASE = '/api';
+
+        // State
+        let tasks = [];
+
+        // DOM Elements
+        const elTaskList = document.getElementById('task-list');
+        const elAddModal = document.getElementById('add-modal');
+        const elInputUrl = document.getElementById('input-url');
+        const elToast = document.getElementById('toast');
+        const elStatActive = document.getElementById('stat-active');
+
+        // Init
+        fetchTasks();
+        setInterval(fetchTasks, 5000); // Poll every 5s
+
+        // Event Listeners
+        document.getElementById('btn-add').addEventListener('click', () => {
+            elAddModal.style.display = 'flex';
+            elInputUrl.focus();
+        });
+
+        document.getElementById('btn-cancel').addEventListener('click', () => {
+            elAddModal.style.display = 'none';
+            elInputUrl.value = '';
+        });
+
+        document.getElementById('btn-refresh').addEventListener('click', fetchTasks);
+
+        document.getElementById('btn-submit').addEventListener('click', async () => {
+            const url = elInputUrl.value.trim();
+            if (!url) return;
+
+            try {
+                const res = await fetch(`${API_BASE}/tasks`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ url })
+                });
+                if (res.ok) {
+                    showToast('Task added successfully');
+                    elAddModal.style.display = 'none';
+                    elInputUrl.value = '';
+                    fetchTasks();
+                } else {
+                    const errorText = await res.text();
+                    showToast(errorText || 'Failed to add task', true);
+                }
+            } catch (e) {
+                showToast('Error connecting to server', true);
+            }
+        });
+
+        // Functions
+        async function fetchTasks() {
+            try {
+                const res = await fetch(`${API_BASE}/tasks`);
+                const data = await res.json();
+                tasks = data;
+                renderTasks();
+                updateStats();
+            } catch (e) {
+                console.error('Failed to fetch tasks', e);
+            }
+        }
+
+        function updateStats() {
+            elStatActive.innerText = tasks.length;
+            // Mock storage calculation or get from server if available
+        }
+
+        function renderTasks() {
+            elTaskList.innerHTML = '';
+            tasks.forEach(task => {
+                let percent = task.total_segments > 0
+                    ? Math.round((task.downloaded_segments / task.total_segments) * 100)
+                    : 0;
+                if (percent > 100) percent = 100;
+
+                // Determine status display
+                let statusLabel = task.status;
+                let statusColor = "var(--text-muted)";
+                let progressBarColor = "";
+
+                if (task.status === 'completed' || percent === 100) {
+                    statusLabel = "Completed";
+                    statusColor = "var(--success)";
+                    progressBarColor = "var(--success)";
+                } else if (task.status === 'stopped') {
+                    statusLabel = "Stopped";
+                    statusColor = "var(--danger)";
+                    progressBarColor = "var(--danger)";
+                } else if (task.status === 'downloading') {
+                    statusLabel = "Downloading";
+                    statusColor = "var(--primary)";
+                }
+
+                // Action Buttons
+                let actionButtons = '';
+
+                actionButtons += `
+                     <a href="/proxy/m3u8/${encodeURIComponent(task.original_url)}" target="_blank" class="btn btn-primary" style="text-decoration:none">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                           <polygon points="5 3 19 12 5 21 5 3"></polygon>
+                        </svg>
+                        Play
+                    </a>`;
+
+                if (task.status === 'downloading') {
+                    actionButtons += `
+                    <button class="btn btn-danger stop-btn" data-id="${task.id}">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                             <rect x="6" y="4" width="4" height="16"></rect>
+                             <rect x="14" y="4" width="4" height="16"></rect>
+                        </svg>
+                        Stop
+                    </button>`;
+                } else {
+                    actionButtons += `
+                    <button class="btn btn-danger delete-btn" data-id="${task.id}">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                           <polyline points="3 6 5 6 21 6"></polyline>
+                           <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                        </svg>
+                        Delete
+                    </button>`;
+                }
+
+                const card = document.createElement('div');
+                card.className = 'task-card';
+                card.innerHTML = `
+                <div class="task-header">
+                    <div class="task-title" title="${task.original_url}">${task.original_url}</div>
+                </div>
+                <div class="task-meta">
+                    <span>ID: ${task.id.substring(0, 8)}...</span>
+                    <span>•</span>
+                    <span>${task.downloaded_segments} / ${task.total_segments} segments</span>
+                </div>
+                <div class="progress-container">
+                    <div class="progress-bar" style="width: ${percent}%; ${progressBarColor ? 'background:' + progressBarColor : ''}"></div>
+                </div>
+                <div class="progress-text">
+                    <span style="color: ${statusColor}; text-transform: capitalize;">${statusLabel}</span>
+                    <span style="color: ${statusColor}">${percent}%</span>
+                </div>
+                <div class="btn-group">
+                    ${actionButtons}
+                </div>
+            `;
+
+                const stopBtn = card.querySelector('.stop-btn');
+                if (stopBtn) stopBtn.addEventListener('click', () => stopTask(task.id));
+
+                const deleteBtn = card.querySelector('.delete-btn');
+                if (deleteBtn) deleteBtn.addEventListener('click', () => deleteTask(task.id));
+
+                elTaskList.appendChild(card);
+            });
+
+            if (tasks.length === 0) {
+                elTaskList.innerHTML = `<div style="text-align:center; color:var(--text-muted); padding: 40px;">No active tasks. Tap + to add one.</div>`;
+            }
+        }
+
+        async function stopTask(id) {
+            if (!confirm('Stop this task?')) return;
+            try {
+                const res = await fetch(`${API_BASE}/tasks/${id}/stop`, { method: 'POST' });
+                if (res.ok) {
+                    showToast('Task stopped');
+                    fetchTasks();
+                } else {
+                    showToast('Failed to stop task', true);
+                }
+            } catch (e) {
+                showToast('Error stopping task', true);
+            }
+        }
+
+        async function deleteTask(id) {
+            if (!confirm('Delete files and record? This cannot be undone.')) return;
+
+            try {
+                const res = await fetch(`${API_BASE}/tasks/${id}`, { method: 'DELETE' });
+                if (res.ok) {
+                    showToast('Task deleted');
+                    fetchTasks();
+                } else {
+                    const txt = await res.text();
+                    showToast(txt || 'Failed to delete', true);
+                }
+            } catch (e) {
+                showToast('Error deleting task', true);
+            }
+        }
+
+        function showToast(msg, isError = false) {
+            const el = document.getElementById('toast-msg');
+            el.innerText = msg;
+            el.parentElement.style.borderColor = isError ? 'var(--danger)' : 'var(--border)';
+            document.getElementById('toast').classList.add('show');
+            setTimeout(() => {
+                document.getElementById('toast').classList.remove('show');
+            }, 3000);
+        }
+    </script>
+</body>
+
+</html>

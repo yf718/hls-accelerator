@@ -1,0 +1,24 @@
+# Binaries
+*.exe
+*.dll
+*.so
+*.dylib
+bin/
+hls-accel.exe
+
+# Cache and Data
+/cache/
+tasks/
+
+# Configuration (if local overrides)
+config.json
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+
+# Go
+vendor/
+go.work
+go.work.sum
