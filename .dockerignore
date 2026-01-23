@@ -1,0 +1,47 @@
+# Git 相关
+.git
+.gitignore
+.gitattributes
+
+# 构建产物（除了需要的 hls-accel）
+*.exe
+*.dll
+*.so
+*.dylib
+
+# 注意：docker-entrypoint.sh 需要被包含
+
+# Go 相关
+go.mod
+go.sum
+*.go
+cmd/
+internal/
+
+# 缓存和临时文件
+cache/
+*.log
+*.tmp
+*.swp
+*.swo
+*~
+
+# IDE 配置
+.vscode/
+.idea/
+*.iml
+
+# 文档（可选，如果不需要在镜像中）
+README.md
+*.md
+
+# 配置文件（如果需要挂载的话）
+config.json
+
+# 测试文件
+*_test.go
+test/
+
+# 其他
+.DS_Store
+Thumbs.db
