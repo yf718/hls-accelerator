@@ -9,10 +9,6 @@ RUN apk add --no-cache \
     ca-certificates \
     && rm -rf /var/cache/apk/*
 
-# 创建非 root 用户以提高安全性
-RUN addgroup -g 1000 appuser && \
-    adduser -D -u 1000 -G appuser appuser
-
 # 设置工作目录
 WORKDIR /app
 
@@ -22,16 +18,14 @@ COPY docker-entrypoint.sh /app/docker-entrypoint.sh
 # 复制编译好的二进制文件
 COPY hls-accel /app/hls-accel
 
+# COPY config.json /app/config.json
+
 # 复制 web 静态文件目录
 COPY web /app/web
 
-# 创建缓存目录并设置权限
+# 创建缓存目录并设置执行权限
 RUN mkdir -p /app/cache && \
-    chmod +x /app/docker-entrypoint.sh && \
-    chown -R appuser:appuser /app
-
-# 切换到非 root 用户
-USER appuser
+    chmod +x /app/docker-entrypoint.sh
 
 # 暴露端口
 # 8084: HLS Accelerator 代理端口
