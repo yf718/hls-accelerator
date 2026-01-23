@@ -365,6 +365,133 @@
         .toast.show {
             transform: translateX(-50%) translateY(0);
         }
+
+        /* Confirm Dialog */
+        .confirm-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.7);
+            backdrop-filter: blur(4px);
+            display: none;
+            justify-content: center;
+            align-items: center;
+            z-index: 2000;
+            padding: 20px;
+        }
+
+        .confirm-overlay.show {
+            display: flex;
+        }
+
+        .confirm-dialog {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 20px;
+            padding: 0;
+            width: 100%;
+            max-width: 400px;
+            box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.4);
+            animation: confirmSlide 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+            overflow: hidden;
+        }
+
+        @keyframes confirmSlide {
+            from {
+                transform: scale(0.9) translateY(20px);
+                opacity: 0;
+            }
+            to {
+                transform: scale(1) translateY(0);
+                opacity: 1;
+            }
+        }
+
+        .confirm-icon {
+            width: 64px;
+            height: 64px;
+            margin: 24px auto 16px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 32px;
+        }
+
+        .confirm-icon.warning {
+            background: rgba(239, 68, 68, 0.15);
+            color: var(--danger);
+        }
+
+        .confirm-icon.danger {
+            background: rgba(239, 68, 68, 0.2);
+            color: var(--danger);
+        }
+
+        .confirm-title {
+            font-size: 1.25rem;
+            font-weight: 600;
+            text-align: center;
+            margin-bottom: 12px;
+            padding: 0 24px;
+            color: var(--text-main);
+        }
+
+        .confirm-message {
+            font-size: 0.95rem;
+            text-align: center;
+            color: var(--text-muted);
+            padding: 0 24px 24px;
+            line-height: 1.5;
+        }
+
+        .confirm-actions {
+            display: flex;
+            border-top: 1px solid var(--border);
+            gap: 0;
+        }
+
+        .confirm-btn {
+            flex: 1;
+            padding: 16px;
+            border: none;
+            background: transparent;
+            color: var(--text-main);
+            font-size: 0.95rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: background 0.2s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+        }
+
+        .confirm-btn:first-child {
+            border-right: 1px solid var(--border);
+        }
+
+        .confirm-btn:hover {
+            background: rgba(255, 255, 255, 0.05);
+        }
+
+        .confirm-btn.primary {
+            color: var(--primary);
+            font-weight: 600;
+        }
+
+        .confirm-btn.danger {
+            color: var(--danger);
+            font-weight: 600;
+        }
+
+        @media (max-width: 600px) {
+            .confirm-dialog {
+                max-width: 90%;
+            }
+        }
     </style>
 </head>
 
@@ -423,6 +550,25 @@
 
     <div class="toast" id="toast">
         <span id="toast-msg">Operation successful</span>
+    </div>
+
+    <!-- Confirm Dialog -->
+    <div class="confirm-overlay" id="confirm-overlay">
+        <div class="confirm-dialog">
+            <div class="confirm-icon" id="confirm-icon">
+                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="12" cy="12" r="10"></circle>
+                    <line x1="12" y1="8" x2="12" y2="12"></line>
+                    <line x1="12" y1="16" x2="12.01" y2="16"></line>
+                </svg>
+            </div>
+            <h3 class="confirm-title" id="confirm-title">确认操作</h3>
+            <p class="confirm-message" id="confirm-message">确定要执行此操作吗？</p>
+            <div class="confirm-actions">
+                <button class="confirm-btn" id="confirm-cancel">取消</button>
+                <button class="confirm-btn" id="confirm-ok">确定</button>
+            </div>
+        </div>
     </div>
 
     <script>
@@ -592,7 +738,8 @@
         }
 
         async function stopTask(id) {
-            if (!confirm('Stop this task?')) return;
+            const confirmed = await showConfirm('停止任务', '确定要停止此任务吗？', 'warning');
+            if (!confirmed) return;
             try {
                 const res = await fetch(`${API_BASE}/tasks/${id}/stop`, { method: 'POST' });
                 if (res.ok) {
@@ -607,7 +754,8 @@
         }
 
         async function deleteTask(id) {
-            if (!confirm('Delete files and record? This cannot be undone.')) return;
+            const confirmed = await showConfirm('删除任务', '确定要删除此任务的文件和记录吗？此操作无法撤销。', 'danger');
+            if (!confirmed) return;
 
             try {
                 const res = await fetch(`${API_BASE}/tasks/${id}`, { method: 'DELETE' });
@@ -631,6 +779,76 @@
             setTimeout(() => {
                 document.getElementById('toast').classList.remove('show');
             }, 3000);
+        }
+
+        // Custom Confirm Dialog
+        function showConfirm(title, message, type = 'warning') {
+            return new Promise((resolve) => {
+                const overlay = document.getElementById('confirm-overlay');
+                const iconEl = document.getElementById('confirm-icon');
+                const titleEl = document.getElementById('confirm-title');
+                const messageEl = document.getElementById('confirm-message');
+                const cancelBtn = document.getElementById('confirm-cancel');
+                const okBtn = document.getElementById('confirm-ok');
+
+                // Set content
+                titleEl.textContent = title;
+                messageEl.textContent = message;
+
+                // Set icon based on type
+                iconEl.className = 'confirm-icon ' + type;
+                if (type === 'danger') {
+                    iconEl.innerHTML = `
+                        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>
+                            <line x1="12" y1="9" x2="12" y2="13"></line>
+                            <line x1="12" y1="17" x2="12.01" y2="17"></line>
+                        </svg>
+                    `;
+                    okBtn.className = 'confirm-btn danger';
+                } else {
+                    iconEl.innerHTML = `
+                        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <circle cx="12" cy="12" r="10"></circle>
+                            <line x1="12" y1="8" x2="12" y2="12"></line>
+                            <line x1="12" y1="16" x2="12.01" y2="16"></line>
+                        </svg>
+                    `;
+                    okBtn.className = 'confirm-btn primary';
+                }
+
+                // Show overlay
+                overlay.classList.add('show');
+
+                // Handle cancel
+                const handleCancel = () => {
+                    overlay.classList.remove('show');
+                    cancelBtn.removeEventListener('click', handleCancel);
+                    okBtn.removeEventListener('click', handleOk);
+                    overlay.removeEventListener('click', handleOverlayClick);
+                    resolve(false);
+                };
+
+                // Handle confirm
+                const handleOk = () => {
+                    overlay.classList.remove('show');
+                    cancelBtn.removeEventListener('click', handleCancel);
+                    okBtn.removeEventListener('click', handleOk);
+                    overlay.removeEventListener('click', handleOverlayClick);
+                    resolve(true);
+                };
+
+                // Handle overlay click (only close if clicking overlay itself, not dialog)
+                const handleOverlayClick = (e) => {
+                    if (e.target === overlay) {
+                        handleCancel();
+                    }
+                };
+
+                cancelBtn.addEventListener('click', handleCancel);
+                okBtn.addEventListener('click', handleOk);
+                overlay.addEventListener('click', handleOverlayClick);
+            });
         }
     </script>
 </body>
