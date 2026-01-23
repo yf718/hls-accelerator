@@ -68,21 +68,11 @@ func (f *FFZYAdFilter) Filter(segments []*m3u8.MediaSegment) map[int]bool {
 	}
 
 	// 记录每个片段是否有 DISCONTINUITY 标记
-	discontinuityIndices := []int{}
+	var discontinuityIndices []int
 	for i, seg := range segments {
 		if seg != nil && seg.Discontinuity {
 			discontinuityIndices = append(discontinuityIndices, i)
 		}
-	}
-
-	// 如果没有 DISCONTINUITY，保留所有片段
-	if len(discontinuityIndices) == 0 {
-		for i := range segments {
-			if segments[i] != nil && segments[i].URI != "" {
-				keep[i] = true
-			}
-		}
-		return keep
 	}
 
 	// 标记所有片段为保留
@@ -92,22 +82,19 @@ func (f *FFZYAdFilter) Filter(segments []*m3u8.MediaSegment) map[int]bool {
 		}
 	}
 
+	// 如果没有 DISCONTINUITY，保留所有片段
+	if len(discontinuityIndices) == 0 {
+		return keep
+	}
+
 	// 检查每对连续的 DISCONTINUITY 之间的片段数量
 	for i := 0; i < len(discontinuityIndices)-1; i++ {
 		start := discontinuityIndices[i]
 		end := discontinuityIndices[i+1]
 
-		// 计算两个 DISCONTINUITY 之间的有效片段数量（不包括 DISCONTINUITY 本身）
-		segmentCount := 0
-		for j := start + 1; j < end; j++ {
-			if segments[j] != nil && segments[j].URI != "" {
-				segmentCount++
-			}
-		}
-
 		// 如果正好是5个片段，则标记为广告（移除）
-		if segmentCount == 5 {
-			for j := start + 1; j < end; j++ {
+		if (end - start) == 5 {
+			for j := start; j < end; j++ {
 				if segments[j] != nil && segments[j].URI != "" {
 					delete(keep, j)
 				}
