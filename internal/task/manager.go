@@ -241,3 +241,25 @@ func (m *Manager) HandleAdd(w http.ResponseWriter, r *http.Request, triggerFunc 
 
 	w.WriteHeader(200)
 }
+
+// DeleteCompletedTasks deletes all tasks with status "completed"
+func (m *Manager) DeleteCompletedTasks() error {
+	// Get all completed tasks
+	completedTasks, err := m.GetTasksByStatus("completed")
+	if err != nil {
+		return fmt.Errorf("failed to get completed tasks: %v", err)
+	}
+
+	var errors []string
+	for _, task := range completedTasks {
+		if err := m.DeleteTask(task.ID); err != nil {
+			errors = append(errors, fmt.Sprintf("failed to delete task %s: %v", task.ID, err))
+		}
+	}
+
+	if len(errors) > 0 {
+		return fmt.Errorf("errors during cleanup: %v", errors)
+	}
+
+	return nil
+}

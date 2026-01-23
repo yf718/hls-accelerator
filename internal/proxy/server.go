@@ -68,6 +68,12 @@ func (s *Server) Start() error {
 	mux.HandleFunc("/proxy/seg/", s.handleSegment)
 	mux.HandleFunc("/proxy/key/", s.handleKey)
 
+	// Start auto cleanup task if enabled
+	if config.GlobalConfig.AutoCleanupEnabled {
+		go s.startAutoCleanup()
+		log.Println("Auto cleanup enabled: will run daily at midnight")
+	}
+
 	log.Printf("Proxy starting at http://localhost%s", s.addr)
 	return http.ListenAndServe(s.addr, mux)
 }
@@ -397,5 +403,37 @@ func (s *Server) triggerDownloads(taskID string, items []playlist.DownloadItem) 
 
 		// Save the actual GID returned by aria2 to database
 		s.taskManager.CreateTaskItem(taskID, item.Filename, actualGID, item.URL)
+	}
+}
+
+// startAutoCleanup starts a goroutine that runs cleanup at midnight every day
+func (s *Server) startAutoCleanup() {
+	// Calculate duration until next midnight
+	now := time.Now()
+	midnight := time.Date(now.Year(), now.Month(), now.Day()+1, 3, 0, 0, 0, now.Location())
+	durationUntilMidnight := midnight.Sub(now)
+
+	// Wait until midnight
+	time.Sleep(durationUntilMidnight)
+
+	// Run cleanup immediately at first midnight
+	s.runCleanup()
+
+	// Then run cleanup every 24 hours
+	ticker := time.NewTicker(24 * time.Hour)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		s.runCleanup()
+	}
+}
+
+// runCleanup executes the cleanup of completed tasks
+func (s *Server) runCleanup() {
+	log.Println("Starting auto cleanup of completed tasks...")
+	if err := s.taskManager.DeleteCompletedTasks(); err != nil {
+		log.Printf("Auto cleanup failed: %v", err)
+	} else {
+		log.Println("Auto cleanup completed successfully")
 	}
 }
