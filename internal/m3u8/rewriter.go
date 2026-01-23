@@ -74,14 +74,31 @@ func RewriteVariant(p *m3u8.MediaPlaylist, proxyBaseURL, taskID string, originBa
 	seenKeys := make(map[string]bool)
 	totalSegments := 0
 
+	// 应用广告过滤器
+	adFilter := GetAdFilter(originBaseURL)
+	var keepSegments map[int]bool
+	if adFilter != nil {
+		keepSegments = adFilter.Filter(p.Segments)
+		// 移除广告片段：将不在保留列表中的片段设置为nil
+		for i, seg := range p.Segments {
+			if seg != nil && !keepSegments[i] {
+				p.Segments[i] = nil
+			}
+		}
+	}
+
+	// 用于重新编号的计数器（只对保留的片段计数）
+	segmentIndex := 0
+
 	// We iterate through segments to collect URLs and rewrite them
-	for i, seg := range p.Segments {
+	for _, seg := range p.Segments {
 		if seg == nil {
 			continue
 		}
 
 		if seg.URI != "" {
 			totalSegments++
+			segmentIndex++ // 只对保留的片段计数
 		}
 
 		// Resolve and Rewrite Segment URI
@@ -96,7 +113,8 @@ func RewriteVariant(p *m3u8.MediaPlaylist, proxyBaseURL, taskID string, originBa
 				}
 			}
 
-			filename := fmt.Sprintf("%05d%s", i+1, ext) // 1-based index with ext
+			// 使用重新编号的索引（segmentIndex）而不是原始索引（i+1）
+			filename := fmt.Sprintf("%05d%s", segmentIndex, ext) // 1-based index with ext
 			encodedURL := url.QueryEscape(fullSegURL)
 
 			// Rewrite to: /proxy/seg/{taskID}/{filename}/{encoded_url}
