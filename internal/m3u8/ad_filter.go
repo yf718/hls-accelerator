@@ -30,8 +30,8 @@ func NewAdFilterRegistry() *AdFilterRegistry {
 	registry := &AdFilterRegistry{
 		filters: []AdFilter{},
 	}
-	// 注册默认的过滤器
-	registry.Register(&FFZYAdFilter{})
+	// FFZYAdFilter 已过期，暂时不再默认启用。
+	// 如后续需要恢复或替换规则，可通过 RegisterAdFilter 手动注册。
 	return registry
 }
 
