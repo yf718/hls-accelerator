@@ -414,7 +414,7 @@ func (s *Server) triggerDownloads(taskID string, items []playlist.DownloadItem) 
 		}
 
 		// Save the actual GID returned by aria2 to database
-		s.taskManager.CreateTaskItem(taskID, item.Filename, actualGID, item.URL)
+		s.taskManager.CreateTaskItem(taskID, item.Filename, actualGID, item.URL, item.Type)
 	}
 }
 

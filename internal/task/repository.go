@@ -51,6 +51,9 @@ func (m *Manager) InitTable() error {
 	if err := m.ensureColumn("task_item", "completed_time", "DATETIME"); err != nil {
 		return err
 	}
+	if err := m.ensureColumn("task_item", "item_type", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
 	_, err := m.db.Exec(`CREATE INDEX IF NOT EXISTS idx_task_item_gid ON task_item(aria2_gid)`)
 	return err
 }
@@ -162,9 +165,9 @@ func (m *Manager) GetTasksByStatus(status string) ([]TaskMetadata, error) {
 // Task Item operations
 
 // CreateTaskItem adds a new task item record
-func (m *Manager) CreateTaskItem(taskID, filename, aria2GID, url string) error {
-	query := `INSERT OR IGNORE INTO task_item (task_id, filename, aria2_gid, url, created_time) VALUES (?, ?, ?, ?, datetime('now'))`
-	_, err := m.db.Exec(query, taskID, filename, aria2GID, url)
+func (m *Manager) CreateTaskItem(taskID, filename, aria2GID, url, itemType string) error {
+	query := `INSERT OR IGNORE INTO task_item (task_id, filename, aria2_gid, url, item_type, created_time) VALUES (?, ?, ?, ?, ?, datetime('now'))`
+	_, err := m.db.Exec(query, taskID, filename, aria2GID, url, itemType)
 	return err
 }
 
@@ -243,7 +246,9 @@ func (m *Manager) MarkTaskItemCompletedByGID(gid string) (string, bool, error) {
 	defer tx.Rollback()
 
 	var taskID string
-	if err := tx.QueryRow(`SELECT task_id FROM task_item WHERE aria2_gid = ?`, gid).Scan(&taskID); err != nil {
+	var itemType string
+	var filename string
+	if err := tx.QueryRow(`SELECT task_id, COALESCE(item_type, ''), filename FROM task_item WHERE aria2_gid = ?`, gid).Scan(&taskID, &itemType, &filename); err != nil {
 		if err == sql.ErrNoRows {
 			return "", false, nil
 		}
@@ -264,6 +269,14 @@ func (m *Manager) MarkTaskItemCompletedByGID(gid string) (string, bool, error) {
 			return "", false, err
 		}
 		return taskID, false, nil
+	}
+
+	shouldCountTowardsProgress := itemType != "key" && !strings.HasSuffix(strings.ToLower(filename), ".key")
+	if !shouldCountTowardsProgress {
+		if err := tx.Commit(); err != nil {
+			return "", false, err
+		}
+		return taskID, true, nil
 	}
 
 	_, err = tx.Exec(`

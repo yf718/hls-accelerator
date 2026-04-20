@@ -38,10 +38,10 @@ func TestMarkTaskItemCompletedByGIDIsIdempotent(t *testing.T) {
 	if err := m.CreateTask(meta); err != nil {
 		t.Fatalf("CreateTask: %v", err)
 	}
-	if err := m.CreateTaskItem(meta.ID, "seg-1.ts", "gid-1", "https://example.com/seg-1.ts"); err != nil {
+	if err := m.CreateTaskItem(meta.ID, "seg-1.ts", "gid-1", "https://example.com/seg-1.ts", "ts"); err != nil {
 		t.Fatalf("CreateTaskItem seg-1: %v", err)
 	}
-	if err := m.CreateTaskItem(meta.ID, "seg-2.ts", "gid-2", "https://example.com/seg-2.ts"); err != nil {
+	if err := m.CreateTaskItem(meta.ID, "seg-2.ts", "gid-2", "https://example.com/seg-2.ts", "ts"); err != nil {
 		t.Fatalf("CreateTaskItem seg-2: %v", err)
 	}
 
@@ -114,5 +114,62 @@ func TestEnqueueProgressNotificationDedupesInflightAndRecent(t *testing.T) {
 
 	if !m.enqueueProgressNotification("gid-1") {
 		t.Fatal("expected expired recent gid to enqueue again")
+	}
+}
+
+func TestMarkTaskItemCompletedByGIDDoesNotCountKeysTowardCompletion(t *testing.T) {
+	m := newTestManager(t)
+
+	meta := TaskMetadata{
+		ID:                 "task-with-key",
+		Name:               "test-task-with-key",
+		OriginalURL:        "https://example.com/test-key.m3u8",
+		TotalSegments:      1,
+		DownloadedSegments: 0,
+		CreatedTime:        time.Now(),
+		Status:             "downloading",
+	}
+	if err := m.CreateTask(meta); err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	if err := m.CreateTaskItem(meta.ID, "enc.key", "gid-key", "https://example.com/enc.key", "key"); err != nil {
+		t.Fatalf("CreateTaskItem key: %v", err)
+	}
+	if err := m.CreateTaskItem(meta.ID, "seg-1.ts", "gid-seg", "https://example.com/seg-1.ts", "ts"); err != nil {
+		t.Fatalf("CreateTaskItem seg-1: %v", err)
+	}
+
+	if _, updated, err := m.MarkTaskItemCompletedByGID("gid-key"); err != nil {
+		t.Fatalf("MarkTaskItemCompletedByGID key: %v", err)
+	} else if !updated {
+		t.Fatal("expected key completion to update item state")
+	}
+
+	taskAfterKey, err := m.GetTask(meta.ID)
+	if err != nil {
+		t.Fatalf("GetTask after key completion: %v", err)
+	}
+	if taskAfterKey.DownloadedSegments != 0 {
+		t.Fatalf("downloaded after key completion = %d, want 0", taskAfterKey.DownloadedSegments)
+	}
+	if taskAfterKey.Status != "downloading" {
+		t.Fatalf("status after key completion = %q, want downloading", taskAfterKey.Status)
+	}
+
+	if _, updated, err := m.MarkTaskItemCompletedByGID("gid-seg"); err != nil {
+		t.Fatalf("MarkTaskItemCompletedByGID segment: %v", err)
+	} else if !updated {
+		t.Fatal("expected segment completion to update progress")
+	}
+
+	taskAfterSegment, err := m.GetTask(meta.ID)
+	if err != nil {
+		t.Fatalf("GetTask after segment completion: %v", err)
+	}
+	if taskAfterSegment.DownloadedSegments != 1 {
+		t.Fatalf("downloaded after segment completion = %d, want 1", taskAfterSegment.DownloadedSegments)
+	}
+	if taskAfterSegment.Status != "completed" {
+		t.Fatalf("status after segment completion = %q, want completed", taskAfterSegment.Status)
 	}
 }
