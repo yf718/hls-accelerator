@@ -373,6 +373,62 @@ func (c *Aria2Client) TellWaiting(offset, num int) ([]Aria2Status, error) {
 	return statuses, nil
 }
 
+func (c *Aria2Client) taskQueueGIDs(dir string) ([]string, error) {
+	if c == nil || dir == "" {
+		return nil, nil
+	}
+
+	statuses, err := c.TellActive()
+	if err != nil {
+		return nil, err
+	}
+
+	gids := make([]string, 0, len(statuses))
+	for _, status := range statuses {
+		if status.Dir == dir {
+			gids = append(gids, status.Gid)
+		}
+	}
+
+	const pageSize = 1000
+	for offset := 0; ; offset += pageSize {
+		waiting, err := c.TellWaiting(offset, pageSize)
+		if err != nil {
+			return nil, err
+		}
+		for _, status := range waiting {
+			if status.Dir == dir {
+				gids = append(gids, status.Gid)
+			}
+		}
+		if len(waiting) < pageSize {
+			break
+		}
+	}
+
+	return normalizeGIDs(gids), nil
+}
+
+// ForceRemoveTaskDownloads removes active/waiting downloads that belong to the
+// specified task directory. Completed results are intentionally excluded because
+// they are not running anymore and can be purged in bulk when deleting.
+func (c *Aria2Client) ForceRemoveTaskDownloads(dir string) (int, error) {
+	gids, err := c.taskQueueGIDs(dir)
+	if err != nil {
+		return 0, err
+	}
+	c.ForceRemoveMany(gids)
+	return len(gids), nil
+}
+
+func (c *Aria2Client) PurgeDownloadResult() error {
+	if c == nil {
+		return nil
+	}
+	_, err := c.Call("aria2.purgeDownloadResult")
+	return err
+}
+
 // RemoveDownloadResult removes a completed/error/removed download from the memory
 func (c *Aria2Client) RemoveDownloadResult(gid string) error {
 	_, err := c.Call("aria2.removeDownloadResult", gid)

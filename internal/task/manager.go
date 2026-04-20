@@ -79,23 +79,21 @@ func (m *Manager) GetTasks() ([]map[string]interface{}, error) {
 }
 
 func (m *Manager) StopTask(id string) error {
-	// 1. Mark as Stopped
-	if err := m.UpdateTaskStatus(id, "stopped"); err != nil {
-		return err
-	}
-
-	// 2. Get all GIDs for this task from database
-	gids, err := m.GetTaskItemGIDs(id)
-	if err != nil {
-		return fmt.Errorf("failed to get task item GIDs: %v", err)
-	}
-
-	// 3. Stop all downloads by GID (batched RPC — many segments would otherwise stall here)
+	// Stop only downloads that are still active/waiting in aria2. Historical
+	// completed GIDs do not consume network resources and make stop needlessly slow.
 	if m.aria2 != nil {
-		m.aria2.ForceRemoveMany(gids)
+		dir := cache.GetTaskDir(id)
+		if _, err := m.aria2.ForceRemoveTaskDownloads(dir); err != nil {
+			// Fall back to the previous DB-driven GID sweep if queue introspection fails.
+			gids, gidErr := m.GetTaskItemGIDs(id)
+			if gidErr != nil {
+				return fmt.Errorf("failed to inspect aria2 queue: %v (and failed to get task gids: %v)", err, gidErr)
+			}
+			m.aria2.ForceRemoveMany(gids)
+		}
 	}
 
-	return nil
+	return m.UpdateTaskStatus(id, "stopped")
 }
 
 func (m *Manager) DeleteTask(id string) error {
@@ -166,10 +164,28 @@ func (m *Manager) deleteTaskResources(id string) error {
 	}
 
 	rpcStart := time.Now()
-	if m.aria2 != nil && len(gids) > 0 {
-		m.aria2.CleanupTaskDownloads(gids)
+	aria2Mode := "disabled"
+	aria2Touched := 0
+	if m.aria2 != nil {
+		dir := cache.GetTaskDir(id)
+		removed, err := m.aria2.ForceRemoveTaskDownloads(dir)
+		if err != nil {
+			aria2Mode = "gid_fallback"
+			if len(gids) > 0 {
+				m.aria2.CleanupTaskDownloads(gids)
+				aria2Touched = len(gids)
+			}
+		} else {
+			aria2Mode = "queue_only+purge"
+			aria2Touched = removed
+			if err := m.aria2.PurgeDownloadResult(); err != nil && len(gids) > 0 {
+				aria2Mode = "queue_only+gid_result_fallback"
+				m.aria2.CleanupTaskDownloads(gids)
+				aria2Touched = len(gids)
+			}
+		}
 	}
-	fmt.Printf("Delete task %s: aria2 cleanup finished in %s (%d gids)\n", id, time.Since(rpcStart), len(gids))
+	fmt.Printf("Delete task %s: aria2 cleanup finished in %s (%s, %d gids)\n", id, time.Since(rpcStart), aria2Mode, aria2Touched)
 
 	fsStart := time.Now()
 	for _, path := range paths {
