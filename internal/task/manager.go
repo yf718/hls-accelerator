@@ -7,10 +7,12 @@ import (
 	"fmt"
 	"hls-accelerator/internal/cache"
 	"hls-accelerator/internal/downloader"
+	"io"
 	"log"
 	"net/http"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -26,6 +28,11 @@ type Manager struct {
 	progressDeduperMu sync.Mutex
 	progressInflight  map[string]struct{}
 	progressRecent    map[string]time.Time
+}
+
+type AddTaskRequest struct {
+	Name string `json:"name"`
+	URL  string `json:"url"`
 }
 
 func NewManager(aria2 *downloader.Aria2Client, db *sql.DB) (*Manager, error) {
@@ -62,6 +69,7 @@ func (m *Manager) GetTasks() ([]map[string]interface{}, error) {
 
 		tasks = append(tasks, map[string]interface{}{
 			"id":                  meta.ID,
+			"name":                meta.Name,
 			"original_url":        meta.OriginalURL,
 			"total_segments":      meta.TotalSegments,
 			"downloaded_segments": downloaded,
@@ -321,17 +329,40 @@ func (m *Manager) HandleDelete(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(200)
 }
 
-func (m *Manager) HandleAdd(w http.ResponseWriter, r *http.Request, triggerFunc func(string) error) {
-	var body struct {
-		URL string `json:"url"`
+func (m *Manager) HandleAdd(w http.ResponseWriter, r *http.Request, triggerFunc func(AddTaskRequest) error) {
+	if !strings.Contains(r.Header.Get("Content-Type"), "application/json") {
+		http.Error(w, "Content-Type must be application/json", 400)
+		return
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+
+	var body AddTaskRequest
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&body); err != nil {
 		http.Error(w, err.Error(), 400)
 		return
 	}
 
+	var extra struct{}
+	if err := decoder.Decode(&extra); err != io.EOF {
+		http.Error(w, "Request body must contain a single JSON object", 400)
+		return
+	}
+
+	body.Name = strings.TrimSpace(body.Name)
+	body.URL = strings.TrimSpace(body.URL)
+	if body.URL == "" {
+		http.Error(w, "url is required", 400)
+		return
+	}
+	if body.Name == "" {
+		http.Error(w, "name is required", 400)
+		return
+	}
+
 	// Validate URL
-	if _, err := url.Parse(body.URL); err != nil {
+	parsedURL, err := url.Parse(body.URL)
+	if err != nil || parsedURL.Scheme == "" || parsedURL.Host == "" {
 		http.Error(w, "Invalid URL", 400)
 		return
 	}
@@ -356,12 +387,27 @@ func (m *Manager) HandleAdd(w http.ResponseWriter, r *http.Request, triggerFunc 
 
 	// Trigger the download asynchronously
 	go func() {
-		if err := triggerFunc(body.URL); err != nil {
+		if err := triggerFunc(body); err != nil {
 			fmt.Printf("Error starting task %s: %v\n", body.URL, err)
 		}
 	}()
 
 	w.WriteHeader(200)
+}
+
+func DeriveTaskName(rawURL string) string {
+	parsedURL, err := url.Parse(rawURL)
+	if err == nil {
+		base := strings.TrimSpace(path.Base(parsedURL.Path))
+		if base != "" && base != "." && base != "/" {
+			return base
+		}
+		if host := strings.TrimSpace(parsedURL.Host); host != "" {
+			return host
+		}
+	}
+
+	return "Untitled Task"
 }
 
 // DeleteCompletedTasks deletes all tasks with status "completed"

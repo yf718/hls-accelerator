@@ -28,6 +28,7 @@ func TestMarkTaskItemCompletedByGIDIsIdempotent(t *testing.T) {
 
 	meta := TaskMetadata{
 		ID:                 "task-1",
+		Name:               "test-task",
 		OriginalURL:        "https://example.com/test.m3u8",
 		TotalSegments:      2,
 		DownloadedSegments: 0,

@@ -6,6 +6,7 @@ import (
 
 type TaskMetadata struct {
 	ID                 string    `json:"id"`
+	Name               string    `json:"name"`
 	OriginalURL        string    `json:"original_url"`
 	TotalSegments      int       `json:"total_segments"`
 	DownloadedSegments int       `json:"downloaded_segments"`

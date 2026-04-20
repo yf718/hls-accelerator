@@ -621,6 +621,10 @@
         <div class="modal">
             <h2 class="modal-title">New Task</h2>
             <div class="form-group">
+                <label class="form-label">Task Name</label>
+                <input type="text" class="form-input" id="input-name" placeholder="My Video">
+            </div>
+            <div class="form-group">
                 <label class="form-label">M3U8 URL</label>
                 <input type="text" class="form-input" id="input-url" placeholder="https://example.com/video.m3u8">
             </div>
@@ -668,6 +672,7 @@
         // DOM Elements
         const elTaskList = document.getElementById('task-list');
         const elAddModal = document.getElementById('add-modal');
+        const elInputName = document.getElementById('input-name');
         const elInputUrl = document.getElementById('input-url');
         const elToast = document.getElementById('toast');
         const elStatActive = document.getElementById('stat-active');
@@ -680,11 +685,12 @@
         // Event Listeners
         document.getElementById('btn-add').addEventListener('click', () => {
             elAddModal.style.display = 'flex';
-            elInputUrl.focus();
+            elInputName.focus();
         });
 
         document.getElementById('btn-cancel').addEventListener('click', () => {
             elAddModal.style.display = 'none';
+            elInputName.value = '';
             elInputUrl.value = '';
         });
 
@@ -692,18 +698,20 @@
         document.getElementById('btn-sync').addEventListener('click', syncTaskProgress);
 
         document.getElementById('btn-submit').addEventListener('click', async () => {
+            const name = elInputName.value.trim();
             const url = elInputUrl.value.trim();
-            if (!url) return;
+            if (!name || !url) return;
 
             try {
                 const res = await fetch(`${API_BASE}/tasks`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ url })
+                    body: JSON.stringify({ name, url })
                 });
                 if (res.ok) {
                     showToast('Task added successfully');
                     elAddModal.style.display = 'none';
+                    elInputName.value = '';
                     elInputUrl.value = '';
                     fetchTasks();
                 } else {
@@ -865,7 +873,12 @@
                 card.className = `task-card ${cardStateClass}`.trim();
                 card.innerHTML = `
                 <div class="task-header">
-                    <div class="task-title" title="${task.original_url}">${task.original_url}</div>
+                    <div>
+                        <div class="task-title" title="${task.name || task.original_url}">${task.name || 'Untitled Task'}</div>
+                        <div class="task-meta">
+                            <span title="${task.original_url}">${task.original_url}</span>
+                        </div>
+                    </div>
                     <div class="status-chip" style="color: ${statusColor};">
                         <span class="status-dot"></span>
                         <span>${statusLabel}</span>

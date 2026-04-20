@@ -80,7 +80,13 @@ func (s *Server) Start() error {
 }
 
 // startDownloadFromURL is used by the API to start a task without a player
-func (s *Server) startDownloadFromURL(rawURL string) error {
+func (s *Server) startDownloadFromURL(addReq task.AddTaskRequest) error {
+	rawURL := addReq.URL
+	taskName := strings.TrimSpace(addReq.Name)
+	if taskName == "" {
+		taskName = task.DeriveTaskName(rawURL)
+	}
+
 	// Check if task exists (for idempotency and recursive calls)
 	exists, status, err := s.taskManager.CheckTaskExists(cache.GetTaskID(rawURL))
 	if err != nil {
@@ -92,12 +98,12 @@ func (s *Server) startDownloadFromURL(rawURL string) error {
 		}
 	}
 
-	req, _ := http.NewRequest("GET", rawURL, nil)
+	httpReq, _ := http.NewRequest("GET", rawURL, nil)
 	for k, v := range config.GlobalConfig.Headers {
-		req.Header.Set(k, v)
+		httpReq.Header.Set(k, v)
 	}
 
-	resp, err := s.client.Do(req)
+	resp, err := s.client.Do(httpReq)
 	if err != nil {
 		return err
 	}
@@ -130,7 +136,10 @@ func (s *Server) startDownloadFromURL(rawURL string) error {
 				}
 			}
 			fullURL := playlist.ResolveURL(base, bestVar.URI)
-			return s.startDownloadFromURL(fullURL)
+			return s.startDownloadFromURL(task.AddTaskRequest{
+				Name: taskName,
+				URL:  fullURL,
+			})
 		}
 		return fmt.Errorf("master playlist has no variants")
 	}
@@ -151,6 +160,7 @@ func (s *Server) startDownloadFromURL(rawURL string) error {
 
 		meta := task.TaskMetadata{
 			ID:             taskID,
+			Name:           taskName,
 			OriginalURL:    rawURL,
 			TotalSegments:  total,
 			CreatedTime:    time.Now(),
@@ -303,6 +313,7 @@ func (s *Server) handleVariantPlaylist(w http.ResponseWriter, r *http.Request, m
 		go func() {
 			meta := task.TaskMetadata{
 				ID:             taskID,
+				Name:           task.DeriveTaskName(originURL),
 				OriginalURL:    originURL,
 				TotalSegments:  total,
 				CreatedTime:    time.Now(),

@@ -11,6 +11,7 @@ func (m *Manager) InitTable() error {
 	query := `
 	CREATE TABLE IF NOT EXISTS tasks (
 		id TEXT PRIMARY KEY,
+		name TEXT NOT NULL DEFAULT '',
 		original_url TEXT,
 		total_segments INTEGER,
 		downloaded_segments INTEGER NOT NULL DEFAULT 0,
@@ -41,6 +42,9 @@ func (m *Manager) InitTable() error {
 	if err := m.ensureColumn("tasks", "downloaded_segments", "INTEGER NOT NULL DEFAULT 0"); err != nil {
 		return err
 	}
+	if err := m.ensureColumn("tasks", "name", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
 	if err := m.ensureColumn("task_item", "status", "TEXT NOT NULL DEFAULT 'queued'"); err != nil {
 		return err
 	}
@@ -52,16 +56,16 @@ func (m *Manager) InitTable() error {
 }
 
 func (m *Manager) CreateTask(meta TaskMetadata) error {
-	query := `INSERT INTO tasks (id, original_url, total_segments, downloaded_segments, created_time, status, proxied_content) VALUES (?, ?, ?, ?, ?, ?, ?)`
-	_, err := m.db.Exec(query, meta.ID, meta.OriginalURL, meta.TotalSegments, meta.DownloadedSegments, meta.CreatedTime, meta.Status, meta.ProxiedContent)
+	query := `INSERT INTO tasks (id, name, original_url, total_segments, downloaded_segments, created_time, status, proxied_content) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+	_, err := m.db.Exec(query, meta.ID, meta.Name, meta.OriginalURL, meta.TotalSegments, meta.DownloadedSegments, meta.CreatedTime, meta.Status, meta.ProxiedContent)
 	return err
 }
 
 func (m *Manager) GetTask(id string) (*TaskMetadata, error) {
-	query := `SELECT id, original_url, total_segments, downloaded_segments, created_time, status FROM tasks WHERE id = ?`
+	query := `SELECT id, name, original_url, total_segments, downloaded_segments, created_time, status FROM tasks WHERE id = ?`
 	row := m.db.QueryRow(query, id)
 	var meta TaskMetadata
-	err := row.Scan(&meta.ID, &meta.OriginalURL, &meta.TotalSegments, &meta.DownloadedSegments, &meta.CreatedTime, &meta.Status)
+	err := row.Scan(&meta.ID, &meta.Name, &meta.OriginalURL, &meta.TotalSegments, &meta.DownloadedSegments, &meta.CreatedTime, &meta.Status)
 	if err != nil {
 		return nil, err
 	}
@@ -98,7 +102,7 @@ func (m *Manager) UpdateTaskDownloadedSegments(id string, downloaded int) error 
 
 func (m *Manager) ListTasksDB() ([]TaskMetadata, error) {
 	// Explicitly NOT selecting proxied_content
-	query := `SELECT id, original_url, total_segments, downloaded_segments, created_time, status FROM tasks ORDER BY created_time DESC`
+	query := `SELECT id, name, original_url, total_segments, downloaded_segments, created_time, status FROM tasks ORDER BY created_time DESC`
 	rows, err := m.db.Query(query)
 	if err != nil {
 		return nil, err
@@ -108,7 +112,7 @@ func (m *Manager) ListTasksDB() ([]TaskMetadata, error) {
 	var tasks []TaskMetadata
 	for rows.Next() {
 		var meta TaskMetadata
-		if err := rows.Scan(&meta.ID, &meta.OriginalURL, &meta.TotalSegments, &meta.DownloadedSegments, &meta.CreatedTime, &meta.Status); err != nil {
+		if err := rows.Scan(&meta.ID, &meta.Name, &meta.OriginalURL, &meta.TotalSegments, &meta.DownloadedSegments, &meta.CreatedTime, &meta.Status); err != nil {
 			return nil, err
 		}
 		tasks = append(tasks, meta)
@@ -137,7 +141,7 @@ func (m *Manager) CheckTaskExists(id string) (bool, string, error) {
 }
 
 func (m *Manager) GetTasksByStatus(status string) ([]TaskMetadata, error) {
-	query := `SELECT id, original_url, total_segments, downloaded_segments, created_time, status FROM tasks WHERE status = ?`
+	query := `SELECT id, name, original_url, total_segments, downloaded_segments, created_time, status FROM tasks WHERE status = ?`
 	rows, err := m.db.Query(query, status)
 	if err != nil {
 		return nil, err
@@ -147,7 +151,7 @@ func (m *Manager) GetTasksByStatus(status string) ([]TaskMetadata, error) {
 	var tasks []TaskMetadata
 	for rows.Next() {
 		var meta TaskMetadata
-		if err := rows.Scan(&meta.ID, &meta.OriginalURL, &meta.TotalSegments, &meta.DownloadedSegments, &meta.CreatedTime, &meta.Status); err != nil {
+		if err := rows.Scan(&meta.ID, &meta.Name, &meta.OriginalURL, &meta.TotalSegments, &meta.DownloadedSegments, &meta.CreatedTime, &meta.Status); err != nil {
 			return nil, err
 		}
 		tasks = append(tasks, meta)
@@ -297,7 +301,7 @@ func (m *Manager) GetTasksByStatuses(statuses ...string) ([]TaskMetadata, error)
 	}
 
 	query := fmt.Sprintf(
-		`SELECT id, original_url, total_segments, downloaded_segments, created_time, status FROM tasks WHERE status IN (%s) ORDER BY created_time DESC`,
+		`SELECT id, name, original_url, total_segments, downloaded_segments, created_time, status FROM tasks WHERE status IN (%s) ORDER BY created_time DESC`,
 		strings.Join(placeholders, ","),
 	)
 	rows, err := m.db.Query(query, args...)
@@ -309,7 +313,7 @@ func (m *Manager) GetTasksByStatuses(statuses ...string) ([]TaskMetadata, error)
 	var tasks []TaskMetadata
 	for rows.Next() {
 		var meta TaskMetadata
-		if err := rows.Scan(&meta.ID, &meta.OriginalURL, &meta.TotalSegments, &meta.DownloadedSegments, &meta.CreatedTime, &meta.Status); err != nil {
+		if err := rows.Scan(&meta.ID, &meta.Name, &meta.OriginalURL, &meta.TotalSegments, &meta.DownloadedSegments, &meta.CreatedTime, &meta.Status); err != nil {
 			return nil, err
 		}
 		tasks = append(tasks, meta)
