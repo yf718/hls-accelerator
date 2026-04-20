@@ -60,6 +60,7 @@ func (s *Server) Start() error {
 	mux.HandleFunc("POST /api/tasks", func(w http.ResponseWriter, r *http.Request) {
 		s.taskManager.HandleAdd(w, r, s.startDownloadFromURL)
 	})
+	mux.HandleFunc("POST /api/tasks/sync", s.taskManager.HandleSyncProgress)
 	mux.HandleFunc("DELETE /api/tasks/{id}", s.taskManager.HandleDelete)
 	mux.HandleFunc("POST /api/tasks/{id}/stop", s.taskManager.HandleStop)
 

@@ -381,7 +381,6 @@ func (m *Manager) DeleteCompletedTasks() error {
 
 func (m *Manager) startProgressTracking() {
 	go m.progressNotificationLoop()
-	go m.progressReconcileLoop()
 }
 
 func (m *Manager) progressNotificationLoop() {
@@ -410,30 +409,17 @@ func (m *Manager) progressNotificationLoop() {
 	}
 }
 
-func (m *Manager) progressReconcileLoop() {
-	// Run a quick bootstrap reconciliation first, then switch to a slower cadence.
-	m.reconcileActiveTaskProgress()
-
-	ticker := time.NewTicker(15 * time.Second)
-	defer ticker.Stop()
-
-	for range ticker.C {
-		m.reconcileActiveTaskProgress()
-	}
-}
-
-func (m *Manager) reconcileActiveTaskProgress() {
+func (m *Manager) SyncTaskProgress() (int, error) {
 	tasks, err := m.GetTasksByStatuses("downloading", "stopped")
 	if err != nil {
-		log.Printf("progress reconcile failed to list tasks: %v", err)
-		return
+		return 0, err
 	}
 
+	updatedCount := 0
 	for _, meta := range tasks {
 		items, err := m.GetIncompleteTaskItems(meta.ID)
 		if err != nil {
-			log.Printf("progress reconcile failed to list items for task=%s: %v", meta.ID, err)
-			continue
+			return updatedCount, fmt.Errorf("failed to list items for task=%s: %w", meta.ID, err)
 		}
 
 		for _, item := range items {
@@ -443,9 +429,28 @@ func (m *Manager) reconcileActiveTaskProgress() {
 			if cache.FileExists(meta.ID, item.Filename+".aria2") {
 				continue
 			}
-			if _, _, err := m.MarkTaskItemCompletedByGID(item.Aria2GID); err != nil {
-				log.Printf("progress reconcile failed for task=%s gid=%s: %v", meta.ID, item.Aria2GID, err)
+			_, updated, err := m.MarkTaskItemCompletedByGID(item.Aria2GID)
+			if err != nil {
+				return updatedCount, fmt.Errorf("failed to sync task=%s gid=%s: %w", meta.ID, item.Aria2GID, err)
+			}
+			if updated {
+				updatedCount++
 			}
 		}
 	}
+
+	return updatedCount, nil
+}
+
+func (m *Manager) HandleSyncProgress(w http.ResponseWriter, r *http.Request) {
+	updated, err := m.SyncTaskProgress()
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"updated": updated,
+	})
 }
