@@ -88,3 +88,30 @@ func TestMarkTaskItemCompletedByGIDIsIdempotent(t *testing.T) {
 		t.Fatalf("status after second completion = %q, want completed", taskAfterSecond.Status)
 	}
 }
+
+func TestEnqueueProgressNotificationDedupesInflightAndRecent(t *testing.T) {
+	m := newTestManager(t)
+	m.progressNotifyCh = make(chan string, 2)
+	m.progressInflight = make(map[string]struct{})
+	m.progressRecent = make(map[string]time.Time)
+
+	if !m.enqueueProgressNotification("gid-1") {
+		t.Fatal("expected first enqueue to succeed")
+	}
+	if m.enqueueProgressNotification("gid-1") {
+		t.Fatal("expected inflight gid to be deduped")
+	}
+
+	m.finishProgressNotification("gid-1")
+	if m.enqueueProgressNotification("gid-1") {
+		t.Fatal("expected recent gid to be deduped")
+	}
+
+	m.progressDeduperMu.Lock()
+	m.progressRecent["gid-1"] = time.Now().Add(-time.Second)
+	m.progressDeduperMu.Unlock()
+
+	if !m.enqueueProgressNotification("gid-1") {
+		t.Fatal("expected expired recent gid to enqueue again")
+	}
+}

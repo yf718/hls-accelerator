@@ -18,17 +18,24 @@ import (
 )
 
 type Manager struct {
-	mu        sync.Mutex
-	aria2     *downloader.Aria2Client
-	db        *sql.DB
-	deleteSem chan struct{}
+	mu                sync.Mutex
+	aria2             *downloader.Aria2Client
+	db                *sql.DB
+	deleteSem         chan struct{}
+	progressNotifyCh  chan string
+	progressDeduperMu sync.Mutex
+	progressInflight  map[string]struct{}
+	progressRecent    map[string]time.Time
 }
 
 func NewManager(aria2 *downloader.Aria2Client, db *sql.DB) (*Manager, error) {
 	m := &Manager{
-		aria2:     aria2,
-		db:        db,
-		deleteSem: make(chan struct{}, 1),
+		aria2:            aria2,
+		db:               db,
+		deleteSem:        make(chan struct{}, 1),
+		progressNotifyCh: make(chan string, 2048),
+		progressInflight: make(map[string]struct{}),
+		progressRecent:   make(map[string]time.Time),
 	}
 	if err := m.InitTable(); err != nil {
 		return nil, err
@@ -380,6 +387,8 @@ func (m *Manager) DeleteCompletedTasks() error {
 }
 
 func (m *Manager) startProgressTracking() {
+	go m.progressNotificationWorker()
+	go m.progressDeduperCleanupLoop()
 	go m.progressNotificationLoop()
 }
 
@@ -393,19 +402,86 @@ func (m *Manager) progressNotificationLoop() {
 			if method != "aria2.onDownloadComplete" || gid == "" {
 				return
 			}
-			taskID, updated, err := m.MarkTaskItemCompletedByGID(gid)
-			if err != nil {
-				log.Printf("progress notify failed for gid=%s: %v", gid, err)
-				return
-			}
-			if updated {
-				log.Printf("Progress updated from aria2 notification: task=%s gid=%s", taskID, gid)
+			if !m.enqueueProgressNotification(gid) {
+				log.Printf("progress notify dropped or deduped for gid=%s", gid)
 			}
 		})
 		if err != nil {
 			log.Printf("aria2 notification loop disconnected: %v", err)
 		}
 		time.Sleep(5 * time.Second)
+	}
+}
+
+func (m *Manager) progressNotificationWorker() {
+	for gid := range m.progressNotifyCh {
+		taskID, updated, err := m.MarkTaskItemCompletedByGID(gid)
+		m.finishProgressNotification(gid)
+		if err != nil {
+			log.Printf("progress notify failed for gid=%s: %v", gid, err)
+			continue
+		}
+		if updated {
+			log.Printf("Progress updated from aria2 notification: task=%s gid=%s", taskID, gid)
+		}
+	}
+}
+
+func (m *Manager) enqueueProgressNotification(gid string) bool {
+	if gid == "" {
+		return false
+	}
+
+	now := time.Now()
+
+	m.progressDeduperMu.Lock()
+	if _, exists := m.progressInflight[gid]; exists {
+		m.progressDeduperMu.Unlock()
+		return false
+	}
+	if until, exists := m.progressRecent[gid]; exists {
+		if now.Before(until) {
+			m.progressDeduperMu.Unlock()
+			return false
+		}
+		delete(m.progressRecent, gid)
+	}
+	m.progressInflight[gid] = struct{}{}
+	m.progressDeduperMu.Unlock()
+
+	select {
+	case m.progressNotifyCh <- gid:
+		return true
+	default:
+		m.finishProgressNotification(gid)
+		return false
+	}
+}
+
+func (m *Manager) finishProgressNotification(gid string) {
+	if gid == "" {
+		return
+	}
+
+	m.progressDeduperMu.Lock()
+	delete(m.progressInflight, gid)
+	m.progressRecent[gid] = time.Now().Add(2 * time.Minute)
+	m.progressDeduperMu.Unlock()
+}
+
+func (m *Manager) progressDeduperCleanupLoop() {
+	ticker := time.NewTicker(time.Minute)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		now := time.Now()
+		m.progressDeduperMu.Lock()
+		for gid, until := range m.progressRecent {
+			if !now.Before(until) {
+				delete(m.progressRecent, gid)
+			}
+		}
+		m.progressDeduperMu.Unlock()
 	}
 }
 
