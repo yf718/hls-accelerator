@@ -10,12 +10,15 @@
             --bg-body: #0f1115;
             --bg-card: #181b21;
             --bg-card-hover: #1f232b;
+            --bg-card-deleting: rgba(59, 130, 246, 0.08);
+            --bg-card-failed: rgba(239, 68, 68, 0.08);
             --primary: #3b82f6;
             --primary-hover: #2563eb;
             --text-main: #e2e8f0;
             --text-muted: #94a3b8;
             --border: #2d3748;
             --success: #10b981;
+            --warning: #f59e0b;
             --danger: #ef4444;
             --glass: rgba(24, 27, 33, 0.7);
         }
@@ -111,10 +114,21 @@
             box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
         }
 
+        .task-card.is-deleting {
+            background: var(--bg-card-deleting);
+            border-color: rgba(59, 130, 246, 0.45);
+        }
+
+        .task-card.is-delete-failed {
+            background: var(--bg-card-failed);
+            border-color: rgba(239, 68, 68, 0.45);
+        }
+
         .task-header {
             display: flex;
             justify-content: space-between;
             margin-bottom: 15px;
+            gap: 12px;
         }
 
         .task-title {
@@ -135,6 +149,27 @@
             gap: 10px;
         }
 
+        .status-chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 10px;
+            border-radius: 999px;
+            border: 1px solid currentColor;
+            font-size: 0.78rem;
+            font-weight: 600;
+            white-space: nowrap;
+            flex-shrink: 0;
+            background: rgba(255, 255, 255, 0.03);
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: currentColor;
+        }
+
         /* Progress Bar */
         .progress-container {
             height: 8px;
@@ -152,12 +187,30 @@
             transition: width 0.5s ease;
         }
 
+        .progress-bar.progress-indeterminate {
+            width: 100% !important;
+            background: linear-gradient(90deg, rgba(59, 130, 246, 0.18), rgba(59, 130, 246, 0.95), rgba(59, 130, 246, 0.18));
+            background-size: 220% 100%;
+            animation: progressSweep 1.4s linear infinite;
+        }
+
+        @keyframes progressSweep {
+            from {
+                background-position: 200% 0;
+            }
+
+            to {
+                background-position: -20% 0;
+            }
+        }
+
         .progress-text {
             font-size: 0.8rem;
             color: var(--text-muted);
             margin-top: 8px;
             display: flex;
             justify-content: space-between;
+            gap: 12px;
         }
 
         /* Actions */
@@ -197,6 +250,24 @@
 
         .btn-danger:hover {
             background: rgba(239, 68, 68, 0.25);
+        }
+
+        .btn-warning {
+            background: rgba(245, 158, 11, 0.15);
+            color: var(--warning);
+        }
+
+        .btn-warning:hover {
+            background: rgba(245, 158, 11, 0.25);
+        }
+
+        .btn[disabled] {
+            opacity: 0.55;
+            cursor: not-allowed;
+        }
+
+        .btn[disabled]:hover {
+            background: inherit;
         }
 
         .btn-icon {
@@ -514,8 +585,8 @@
                 <div class="stat-label">Active Tasks</div>
             </div>
             <div class="stat-card">
-                <div class="stat-value" id="stat-storage">0 MB</div>
-                <div class="stat-label">Total Cache</div>
+                <div class="stat-value" id="stat-storage">0</div>
+                <div class="stat-label">Total Tasks</div>
             </div>
         </div>
 
@@ -572,9 +643,13 @@
 
     <script>
         const API_BASE = '/api';
+        const DEFAULT_POLL_INTERVAL = 5000;
+        const BUSY_POLL_INTERVAL = 1500;
 
         // State
         let tasks = [];
+        let pendingDeletes = new Set();
+        let pollTimer = null;
 
         // DOM Elements
         const elTaskList = document.getElementById('task-list');
@@ -582,10 +657,11 @@
         const elInputUrl = document.getElementById('input-url');
         const elToast = document.getElementById('toast');
         const elStatActive = document.getElementById('stat-active');
+        const elStatStorage = document.getElementById('stat-storage');
 
         // Init
         fetchTasks();
-        setInterval(fetchTasks, 5000); // Poll every 5s
+        scheduleNextPoll();
 
         // Event Listeners
         document.getElementById('btn-add').addEventListener('click', () => {
@@ -630,16 +706,33 @@
                 const res = await fetch(`${API_BASE}/tasks`);
                 const data = await res.json();
                 tasks = data;
+                pendingDeletes.forEach(id => {
+                    if (!tasks.some(task => task.id === id)) {
+                        pendingDeletes.delete(id);
+                    }
+                });
                 renderTasks();
                 updateStats();
             } catch (e) {
                 console.error('Failed to fetch tasks', e);
+            } finally {
+                scheduleNextPoll();
             }
         }
 
+        function scheduleNextPoll() {
+            if (pollTimer) {
+                clearTimeout(pollTimer);
+            }
+            const hasBusyTask = tasks.some(task => task.status === 'deleting' || task.status === 'delete_failed') || pendingDeletes.size > 0;
+            const delay = hasBusyTask ? BUSY_POLL_INTERVAL : DEFAULT_POLL_INTERVAL;
+            pollTimer = setTimeout(fetchTasks, delay);
+        }
+
         function updateStats() {
-            elStatActive.innerText = tasks.length;
-            // Mock storage calculation or get from server if available
+            const activeCount = tasks.filter(task => task.status === 'downloading' || task.status === 'deleting').length;
+            elStatActive.innerText = activeCount;
+            elStatStorage.innerText = `${tasks.length} Tasks`;
         }
 
         function renderTasks() {
@@ -654,6 +747,10 @@
                 let statusLabel = task.status;
                 let statusColor = "var(--text-muted)";
                 let progressBarColor = "";
+                let progressTextRight = `${percent}%`;
+                let progressExtraText = `${task.downloaded_segments} / ${task.total_segments} segments`;
+                let cardStateClass = "";
+                let isProgressIndeterminate = false;
 
                 if (task.status === 'completed' || percent === 100) {
                     statusLabel = "Completed";
@@ -666,13 +763,28 @@
                 } else if (task.status === 'downloading') {
                     statusLabel = "Downloading";
                     statusColor = "var(--primary)";
+                } else if (task.status === 'deleting') {
+                    statusLabel = "Deleting";
+                    statusColor = "var(--primary)";
+                    progressTextRight = "Cleaning up";
+                    progressExtraText = "Files are being removed in the background";
+                    cardStateClass = "is-deleting";
+                    isProgressIndeterminate = true;
+                } else if (task.status === 'delete_failed') {
+                    statusLabel = "Delete Failed";
+                    statusColor = "var(--danger)";
+                    progressBarColor = "var(--danger)";
+                    progressTextRight = "Retry needed";
+                    progressExtraText = "Background cleanup failed. You can delete again.";
+                    cardStateClass = "is-delete-failed";
                 }
 
                 // Action Buttons
                 let actionButtons = '';
+                const isDeleting = task.status === 'deleting';
 
                 actionButtons += `
-                     <a href="/proxy/m3u8/${encodeURIComponent(task.original_url)}" target="_blank" class="btn btn-primary" style="text-decoration:none">
+                     <a href="/proxy/m3u8/${encodeURIComponent(task.original_url)}" target="_blank" class="btn btn-primary" style="text-decoration:none; ${isDeleting ? 'pointer-events:none; opacity:0.55;' : ''}">
                         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                            <polygon points="5 3 19 12 5 21 5 3"></polygon>
                         </svg>
@@ -688,34 +800,55 @@
                         </svg>
                         Stop
                     </button>`;
-                } else {
+                } else if (task.status === 'deleting') {
                     actionButtons += `
-                    <button class="btn btn-danger delete-btn" data-id="${task.id}">
+                    <button class="btn btn-primary" disabled>
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M12 2v4"></path>
+                            <path d="M12 18v4"></path>
+                            <path d="m4.93 4.93 2.83 2.83"></path>
+                            <path d="m16.24 16.24 2.83 2.83"></path>
+                            <path d="M2 12h4"></path>
+                            <path d="M18 12h4"></path>
+                            <path d="m4.93 19.07 2.83-2.83"></path>
+                            <path d="m16.24 7.76 2.83-2.83"></path>
+                        </svg>
+                        Deleting
+                    </button>`;
+                } else {
+                    const deleteLabel = task.status === 'delete_failed' ? 'Retry Delete' : 'Delete';
+                    const deleteClass = task.status === 'delete_failed' ? 'btn btn-warning delete-btn' : 'btn btn-danger delete-btn';
+                    actionButtons += `
+                    <button class="${deleteClass}" data-id="${task.id}">
                         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                            <polyline points="3 6 5 6 21 6"></polyline>
                            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
                         </svg>
-                        Delete
+                        ${deleteLabel}
                     </button>`;
                 }
 
                 const card = document.createElement('div');
-                card.className = 'task-card';
+                card.className = `task-card ${cardStateClass}`.trim();
                 card.innerHTML = `
                 <div class="task-header">
                     <div class="task-title" title="${task.original_url}">${task.original_url}</div>
+                    <div class="status-chip" style="color: ${statusColor};">
+                        <span class="status-dot"></span>
+                        <span>${statusLabel}</span>
+                    </div>
                 </div>
                 <div class="task-meta">
                     <span>ID: ${task.id.substring(0, 8)}...</span>
                     <span>•</span>
-                    <span>${task.downloaded_segments} / ${task.total_segments} segments</span>
+                    <span>${progressExtraText}</span>
                 </div>
                 <div class="progress-container">
-                    <div class="progress-bar" style="width: ${percent}%; ${progressBarColor ? 'background:' + progressBarColor : ''}"></div>
+                    <div class="progress-bar ${isProgressIndeterminate ? 'progress-indeterminate' : ''}" style="width: ${isProgressIndeterminate ? 100 : percent}%; ${progressBarColor ? 'background:' + progressBarColor : ''}"></div>
                 </div>
                 <div class="progress-text">
-                    <span style="color: ${statusColor}; text-transform: capitalize;">${statusLabel}</span>
-                    <span style="color: ${statusColor}">${percent}%</span>
+                    <span style="color: ${statusColor};">${statusLabel === 'Delete Failed' ? 'Background cleanup needs attention' : statusLabel === 'Deleting' ? 'Delete request accepted' : task.status === 'downloading' ? 'Download in progress' : statusLabel}</span>
+                    <span style="color: ${statusColor}">${progressTextRight}</span>
                 </div>
                 <div class="btn-group">
                     ${actionButtons}
@@ -753,13 +886,30 @@
         }
 
         async function deleteTask(id) {
-            const confirmed = await showConfirm('删除任务', '确定要删除此任务的文件和记录吗？此操作无法撤销。', 'danger');
+            const task = tasks.find(item => item.id === id);
+            const isRetry = task && task.status === 'delete_failed';
+            const confirmed = await showConfirm(
+                isRetry ? '重试删除任务' : '删除任务',
+                isRetry
+                    ? '上次后台删除没有完成。现在重试会继续清理残留文件和记录。'
+                    : '确定要删除此任务的文件和记录吗？删除会先进入后台清理状态，然后自动完成。',
+                'danger'
+            );
             if (!confirmed) return;
 
             try {
                 const res = await fetch(`${API_BASE}/tasks/${id}`, { method: 'DELETE' });
                 if (res.ok) {
-                    showToast('Task deleted');
+                    pendingDeletes.add(id);
+                    tasks = tasks.map(task => task.id === id ? {
+                        ...task,
+                        status: 'deleting',
+                        downloaded_segments: 0
+                    } : task);
+                    renderTasks();
+                    updateStats();
+                    scheduleNextPoll();
+                    showToast(isRetry ? 'Delete retried in background' : 'Delete started in background');
                     fetchTasks();
                 } else {
                     const txt = await res.text();

@@ -9,19 +9,24 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
+	"strings"
 	"sync"
+	"time"
 )
 
 type Manager struct {
-	mu    sync.Mutex
-	aria2 *downloader.Aria2Client
-	db    *sql.DB
+	mu        sync.Mutex
+	aria2     *downloader.Aria2Client
+	db        *sql.DB
+	deleteSem chan struct{}
 }
 
 func NewManager(aria2 *downloader.Aria2Client, db *sql.DB) (*Manager, error) {
 	m := &Manager{
-		aria2: aria2,
-		db:    db,
+		aria2:     aria2,
+		db:        db,
+		deleteSem: make(chan struct{}, 1),
 	}
 	if err := m.InitTable(); err != nil {
 		return nil, err
@@ -44,6 +49,10 @@ func (m *Manager) GetTasks() ([]map[string]interface{}, error) {
 		// Optimization: If task is completed, we trust the DB and skip filesystem check
 		if meta.Status == "completed" {
 			downloaded = meta.TotalSegments
+		} else if meta.Status == "deleting" || meta.Status == "delete_failed" {
+			// Deleting tasks may already have their cache directory detached, so probing
+			// the filesystem would be both slow and misleading.
+			downloaded = 0
 		} else {
 			// Calculate progress by checking task_item records
 			downloaded = m.countDownloadedSegments(meta.ID)
@@ -81,64 +90,189 @@ func (m *Manager) StopTask(id string) error {
 		return fmt.Errorf("failed to get task item GIDs: %v", err)
 	}
 
-	// 3. Stop all downloads by GID
+	// 3. Stop all downloads by GID (batched RPC — many segments would otherwise stall here)
 	if m.aria2 != nil {
-		for _, gid := range gids {
-			// Try to remove from aria2, ignore errors (task might already be completed/removed)
-			m.aria2.ForceRemove(gid)
-		}
+		m.aria2.ForceRemoveMany(gids)
 	}
 
 	return nil
 }
 
 func (m *Manager) DeleteTask(id string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	// Check status first
 	meta, err := m.GetTask(id)
 	if err != nil {
 		return err // Task not found
 	}
 
-	if meta.Status == "downloading" {
+	switch meta.Status {
+	case "downloading":
 		return fmt.Errorf("cannot delete running task, please stop it first")
+	case "deleting":
+		return nil
 	}
 
-	// Get all GIDs before deleting from DB
+	if err := m.UpdateTaskStatus(id, "deleting"); err != nil {
+		return fmt.Errorf("failed to mark task as deleting: %v", err)
+	}
+
+	go m.deleteTaskAsync(*meta)
+
+	return nil
+}
+
+func (m *Manager) deleteTaskAsync(meta TaskMetadata) {
+	m.acquireDeleteSlot()
+	defer m.releaseDeleteSlot()
+
+	start := time.Now()
+	fmt.Printf("Delete task %s: started (previous_status=%s)\n", meta.ID, meta.Status)
+
+	if err := m.deleteTaskResources(meta.ID); err != nil {
+		fmt.Printf("Delete task %s: failed after %s: %v\n", meta.ID, time.Since(start), err)
+		_ = m.UpdateTaskStatus(meta.ID, "delete_failed")
+		return
+	}
+
+	fmt.Printf("Delete task %s: completed in %s\n", meta.ID, time.Since(start))
+}
+
+func (m *Manager) acquireDeleteSlot() {
+	if m == nil || m.deleteSem == nil {
+		return
+	}
+	m.deleteSem <- struct{}{}
+}
+
+func (m *Manager) releaseDeleteSlot() {
+	if m == nil || m.deleteSem == nil {
+		return
+	}
+	<-m.deleteSem
+}
+
+func (m *Manager) deleteTaskResources(id string) error {
 	gids, err := m.GetTaskItemGIDs(id)
-	if err == nil && m.aria2 != nil {
-		// Remove all GIDs from aria2 (including completed ones)
-		for _, gid := range gids {
-			// Use ForceRemove to remove even completed downloads
-			m.aria2.ForceRemove(gid)
-			// Also try to remove from download results (for completed tasks)
-			m.aria2.RemoveDownloadResult(gid)
+	if err != nil {
+		return fmt.Errorf("failed to get task item GIDs: %v", err)
+	}
+
+	paths, err := m.prepareTaskDeletionPaths(id)
+	if err != nil {
+		return fmt.Errorf("failed to prepare delete paths: %v", err)
+	}
+
+	rpcStart := time.Now()
+	if m.aria2 != nil && len(gids) > 0 {
+		m.aria2.CleanupTaskDownloads(gids)
+	}
+	fmt.Printf("Delete task %s: aria2 cleanup finished in %s (%d gids)\n", id, time.Since(rpcStart), len(gids))
+
+	fsStart := time.Now()
+	for _, path := range paths {
+		if err := os.RemoveAll(path); err != nil {
+			return fmt.Errorf("failed to remove files at %s: %v", path, err)
+		}
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			return fmt.Errorf("directory still exists: %s", path)
 		}
 	}
+	fmt.Printf("Delete task %s: file cleanup finished in %s (%d paths)\n", id, time.Since(fsStart), len(paths))
 
-	dir := cache.GetTaskDir(id)
-
-	// Remove files
-	// We try to remove. If it fails, we return error.
-	if err := os.RemoveAll(dir); err != nil {
-		return fmt.Errorf("failed to remove files: %v", err)
-	}
-
-	// Double check
-	if _, err := os.Stat(dir); !os.IsNotExist(err) {
-		return fmt.Errorf("directory still exists")
-	}
-
-	// Remove task items from DB (must be done before deleting task)
+	dbStart := time.Now()
 	if err := m.DeleteTaskItems(id); err != nil {
 		return fmt.Errorf("failed to delete task items: %v", err)
 	}
-
-	// Remove task from DB
 	if err := m.DeleteTaskDB(id); err != nil {
 		return fmt.Errorf("failed to delete from db: %v", err)
 	}
+	fmt.Printf("Delete task %s: db cleanup finished in %s\n", id, time.Since(dbStart))
 
 	return nil
+}
+
+func (m *Manager) prepareTaskDeletionPaths(id string) ([]string, error) {
+	paths := make([]string, 0, 2)
+
+	dir := cache.GetTaskDir(id)
+	if info, err := os.Stat(dir); err == nil && info.IsDir() {
+		detachedDir, detachErr := detachTaskDir(id)
+		if detachErr != nil {
+			return nil, detachErr
+		}
+		paths = append(paths, detachedDir)
+	} else if err != nil && !os.IsNotExist(err) {
+		return nil, err
+	}
+
+	stalePaths, err := findDetachedTaskDirs(id)
+	if err != nil {
+		return nil, err
+	}
+	paths = append(paths, stalePaths...)
+
+	return uniquePaths(paths), nil
+}
+
+func detachTaskDir(taskID string) (string, error) {
+	dir := cache.GetTaskDir(taskID)
+	trashRoot := filepath.Join(filepath.Dir(dir), ".deleting")
+	if err := os.MkdirAll(trashRoot, 0755); err != nil {
+		return "", err
+	}
+
+	detachedDir := filepath.Join(trashRoot, fmt.Sprintf("%s-%d", taskID, time.Now().UnixNano()))
+	if err := os.Rename(dir, detachedDir); err != nil {
+		return "", err
+	}
+	return detachedDir, nil
+}
+
+func findDetachedTaskDirs(taskID string) ([]string, error) {
+	dir := cache.GetTaskDir(taskID)
+	trashRoot := filepath.Join(filepath.Dir(dir), ".deleting")
+	entries, err := os.ReadDir(trashRoot)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	prefix := taskID + "-"
+	paths := make([]string, 0)
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		if strings.HasPrefix(entry.Name(), prefix) {
+			paths = append(paths, filepath.Join(trashRoot, entry.Name()))
+		}
+	}
+	return paths, nil
+}
+
+func uniquePaths(paths []string) []string {
+	if len(paths) == 0 {
+		return nil
+	}
+
+	out := make([]string, 0, len(paths))
+	seen := make(map[string]struct{}, len(paths))
+	for _, path := range paths {
+		if path == "" {
+			continue
+		}
+		if _, ok := seen[path]; ok {
+			continue
+		}
+		seen[path] = struct{}{}
+		out = append(out, path)
+	}
+	return out
 }
 
 // countDownloadedSegments counts completed downloads by checking task_item records

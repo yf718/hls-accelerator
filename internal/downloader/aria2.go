@@ -41,6 +41,12 @@ type JsonRpcError struct {
 	Message string `json:"message"`
 }
 
+type rpcMethodCall struct {
+	methodName string
+	params     []interface{}
+	fallback   func() error
+}
+
 func (c *Aria2Client) Call(method string, params ...interface{}) (interface{}, error) {
 	// If secret is set, it must be the first parameter as "token:secret"
 	finalParams := make([]interface{}, 0)
@@ -155,6 +161,186 @@ func (c *Aria2Client) Remove(gid string) error {
 func (c *Aria2Client) ForceRemove(gid string) error {
 	_, err := c.Call("aria2.forceRemove", gid)
 	return err
+}
+
+func normalizeGIDs(gids []string) []string {
+	if len(gids) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(gids))
+	seen := make(map[string]struct{}, len(gids))
+	for _, gid := range gids {
+		if gid == "" {
+			continue
+		}
+		if _, ok := seen[gid]; ok {
+			continue
+		}
+		seen[gid] = struct{}{}
+		out = append(out, gid)
+	}
+	return out
+}
+
+// innerRPCParams builds per-method params for nested RPC calls (e.g. system.multicall).
+func (c *Aria2Client) innerRPCParams(args ...interface{}) []interface{} {
+	if c.Secret == "" {
+		return args
+	}
+	out := make([]interface{}, 0, len(args)+1)
+	out = append(out, "token:"+c.Secret)
+	out = append(out, args...)
+	return out
+}
+
+func (c *Aria2Client) invokeMultiCall(calls []rpcMethodCall) []int {
+	if len(calls) == 0 {
+		return nil
+	}
+
+	methods := make([]interface{}, 0, len(calls))
+	for _, call := range calls {
+		methods = append(methods, map[string]interface{}{
+			"methodName": call.methodName,
+			"params":     call.params,
+		})
+	}
+
+	result, err := c.Call("system.multicall", methods)
+	if err != nil {
+		return allIndexes(len(calls))
+	}
+
+	failed, ok := collectFailedMultiCallIndexes(result, len(calls))
+	if !ok {
+		return allIndexes(len(calls))
+	}
+	return failed
+}
+
+func collectFailedMultiCallIndexes(result interface{}, expected int) ([]int, bool) {
+	list, ok := result.([]interface{})
+	if !ok || len(list) != expected {
+		return nil, false
+	}
+
+	failed := make([]int, 0)
+	for i, item := range list {
+		if isMultiCallItemError(item) {
+			failed = append(failed, i)
+		}
+	}
+	return failed, true
+}
+
+func isMultiCallItemError(item interface{}) bool {
+	switch v := item.(type) {
+	case map[string]interface{}:
+		return hasRPCErrorFields(v)
+	case []interface{}:
+		for _, nested := range v {
+			if nestedMap, ok := nested.(map[string]interface{}); ok && hasRPCErrorFields(nestedMap) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func hasRPCErrorFields(m map[string]interface{}) bool {
+	_, hasCode := m["code"]
+	_, hasMessage := m["message"]
+	return hasCode || hasMessage
+}
+
+func allIndexes(n int) []int {
+	indexes := make([]int, n)
+	for i := range indexes {
+		indexes[i] = i
+	}
+	return indexes
+}
+
+// ForceRemoveMany removes many downloads from aria2 queues using batched system.multicall
+// (one HTTP request per batch instead of one per GID).
+func (c *Aria2Client) ForceRemoveMany(gids []string) {
+	if c == nil {
+		return
+	}
+	gids = normalizeGIDs(gids)
+	if len(gids) == 0 {
+		return
+	}
+
+	const batch = 64
+	for i := 0; i < len(gids); i += batch {
+		j := i + batch
+		if j > len(gids) {
+			j = len(gids)
+		}
+		chunk := gids[i:j]
+
+		calls := make([]rpcMethodCall, 0, len(chunk))
+		for _, gid := range chunk {
+			gid := gid
+			calls = append(calls, rpcMethodCall{
+				methodName: "aria2.forceRemove",
+				params:     c.innerRPCParams(gid),
+				fallback: func() error {
+					return c.ForceRemove(gid)
+				},
+			})
+		}
+
+		for _, idx := range c.invokeMultiCall(calls) {
+			_ = calls[idx].fallback()
+		}
+	}
+}
+
+// CleanupTaskDownloads runs forceRemove and removeDownloadResult for each GID using
+// batched system.multicall. Sequential per-GID RPC was a major bottleneck when deleting
+// HLS tasks with thousands of segments.
+func (c *Aria2Client) CleanupTaskDownloads(gids []string) {
+	if c == nil {
+		return
+	}
+	gids = normalizeGIDs(gids)
+	if len(gids) == 0 {
+		return
+	}
+
+	const batch = 32 // 32 gids * 2 calls = 64 sub-calls per HTTP request
+	for i := 0; i < len(gids); i += batch {
+		j := i + batch
+		if j > len(gids) {
+			j = len(gids)
+		}
+		chunk := gids[i:j]
+
+		calls := make([]rpcMethodCall, 0, len(chunk)*2)
+		for _, gid := range chunk {
+			gid := gid
+			calls = append(calls, rpcMethodCall{
+				methodName: "aria2.forceRemove",
+				params:     c.innerRPCParams(gid),
+				fallback: func() error {
+					return c.ForceRemove(gid)
+				},
+			})
+			calls = append(calls, rpcMethodCall{
+				methodName: "aria2.removeDownloadResult",
+				params:     c.innerRPCParams(gid),
+				fallback: func() error {
+					return c.RemoveDownloadResult(gid)
+				},
+			})
+		}
+
+		for _, idx := range c.invokeMultiCall(calls) {
+			_ = calls[idx].fallback()
+		}
+	}
 }
 
 func (c *Aria2Client) TellWaiting(offset, num int) ([]Aria2Status, error) {
