@@ -1,11 +1,13 @@
 package task
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
 	"hls-accelerator/internal/cache"
 	"hls-accelerator/internal/downloader"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -31,10 +33,11 @@ func NewManager(aria2 *downloader.Aria2Client, db *sql.DB) (*Manager, error) {
 	if err := m.InitTable(); err != nil {
 		return nil, err
 	}
+	m.startProgressTracking()
 	return m, nil
 }
 
-// GetTasks returns list of tasks from DB with calculated progress
+// GetTasks returns list of tasks using DB-backed progress snapshots.
 func (m *Manager) GetTasks() ([]map[string]interface{}, error) {
 	dbTasks, err := m.ListTasksDB()
 	if err != nil {
@@ -44,26 +47,10 @@ func (m *Manager) GetTasks() ([]map[string]interface{}, error) {
 	tasks := []map[string]interface{}{}
 
 	for _, meta := range dbTasks {
-		var downloaded int
-
-		// Optimization: If task is completed, we trust the DB and skip filesystem check
-		if meta.Status == "completed" {
+		downloaded := meta.DownloadedSegments
+		if meta.Status == "completed" && downloaded < meta.TotalSegments {
 			downloaded = meta.TotalSegments
-		} else if meta.Status == "deleting" || meta.Status == "delete_failed" {
-			// Deleting tasks may already have their cache directory detached, so probing
-			// the filesystem would be both slow and misleading.
-			downloaded = 0
-		} else {
-			// Calculate progress by checking task_item records
-			downloaded = m.countDownloadedSegments(meta.ID)
-
-			// Check if completed (update DB if changed)
-			if meta.TotalSegments > 0 && downloaded >= meta.TotalSegments {
-				meta.Status = "completed"
-				downloaded = meta.TotalSegments // Ensure consistency
-				// Update DB
-				go m.UpdateTaskStatus(meta.ID, "completed")
-			}
+			go m.UpdateTaskDownloadedSegments(meta.ID, downloaded)
 		}
 
 		tasks = append(tasks, map[string]interface{}{
@@ -291,28 +278,6 @@ func uniquePaths(paths []string) []string {
 	return out
 }
 
-// countDownloadedSegments counts completed downloads by checking task_item records
-func (m *Manager) countDownloadedSegments(taskID string) int {
-	// Get all task items from database
-	items, err := m.GetTaskItems(taskID)
-	if err != nil {
-		// Fallback to 0 if query fails
-		return 0
-	}
-
-	count := 0
-	for _, item := range items {
-		// Check if file exists and is complete (no .aria2 file)
-		if cache.FileExists(taskID, item.Filename) {
-			aria2File := item.Filename + ".aria2"
-			if !cache.FileExists(taskID, aria2File) {
-				count++
-			}
-		}
-	}
-	return count
-}
-
 // API Handlers
 func (m *Manager) HandleList(w http.ResponseWriter, r *http.Request) {
 	tasks, err := m.GetTasks()
@@ -412,4 +377,75 @@ func (m *Manager) DeleteCompletedTasks() error {
 	}
 
 	return nil
+}
+
+func (m *Manager) startProgressTracking() {
+	go m.progressNotificationLoop()
+	go m.progressReconcileLoop()
+}
+
+func (m *Manager) progressNotificationLoop() {
+	if m.aria2 == nil {
+		return
+	}
+
+	for {
+		err := m.aria2.ListenNotifications(context.Background(), func(method, gid string) {
+			if method != "aria2.onDownloadComplete" || gid == "" {
+				return
+			}
+			taskID, updated, err := m.MarkTaskItemCompletedByGID(gid)
+			if err != nil {
+				log.Printf("progress notify failed for gid=%s: %v", gid, err)
+				return
+			}
+			if updated {
+				log.Printf("Progress updated from aria2 notification: task=%s gid=%s", taskID, gid)
+			}
+		})
+		if err != nil {
+			log.Printf("aria2 notification loop disconnected: %v", err)
+		}
+		time.Sleep(5 * time.Second)
+	}
+}
+
+func (m *Manager) progressReconcileLoop() {
+	// Run a quick bootstrap reconciliation first, then switch to a slower cadence.
+	m.reconcileActiveTaskProgress()
+
+	ticker := time.NewTicker(15 * time.Second)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		m.reconcileActiveTaskProgress()
+	}
+}
+
+func (m *Manager) reconcileActiveTaskProgress() {
+	tasks, err := m.GetTasksByStatuses("downloading", "stopped")
+	if err != nil {
+		log.Printf("progress reconcile failed to list tasks: %v", err)
+		return
+	}
+
+	for _, meta := range tasks {
+		items, err := m.GetIncompleteTaskItems(meta.ID)
+		if err != nil {
+			log.Printf("progress reconcile failed to list items for task=%s: %v", meta.ID, err)
+			continue
+		}
+
+		for _, item := range items {
+			if !cache.FileExists(meta.ID, item.Filename) {
+				continue
+			}
+			if cache.FileExists(meta.ID, item.Filename+".aria2") {
+				continue
+			}
+			if _, _, err := m.MarkTaskItemCompletedByGID(item.Aria2GID); err != nil {
+				log.Printf("progress reconcile failed for task=%s gid=%s: %v", meta.ID, item.Aria2GID, err)
+			}
+		}
+	}
 }
