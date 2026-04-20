@@ -22,3 +22,7 @@ config.json
 vendor/
 go.work
 go.work.sum
+.codex
+.gocache/
+
+
