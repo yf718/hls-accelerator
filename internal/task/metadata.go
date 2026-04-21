@@ -11,6 +11,6 @@ type TaskMetadata struct {
 	TotalSegments      int       `json:"total_segments"`
 	DownloadedSegments int       `json:"downloaded_segments"`
 	CreatedTime        time.Time `json:"created_time"`
-	Status             string    `json:"status"` // "downloading", "completed", "stopped"
+	Status             string    `json:"status"` // "downloading", "stopping", "completed", "stopped"
 	ProxiedContent     string    `json:"-"`      // Large field, excluding from JSON list
 }

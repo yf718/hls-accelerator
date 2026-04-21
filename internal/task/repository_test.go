@@ -204,6 +204,43 @@ func TestMarkTaskItemCompletedByGIDDoesNotCountKeysTowardCompletion(t *testing.T
 	}
 }
 
+func TestMarkTaskItemCompletedByGIDPreservesStoppingStatus(t *testing.T) {
+	m := newTestManager(t)
+
+	meta := TaskMetadata{
+		ID:                 "task-stopping-gid",
+		Name:               "stopping-gid",
+		OriginalURL:        "https://example.com/stopping-gid.m3u8",
+		TotalSegments:      1,
+		DownloadedSegments: 0,
+		CreatedTime:        time.Now(),
+		Status:             "stopping",
+	}
+	if err := m.CreateTask(meta); err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	if err := m.CreateTaskItem(meta.ID, "seg-1.ts", "gid-1", "https://example.com/seg-1.ts", "ts"); err != nil {
+		t.Fatalf("CreateTaskItem: %v", err)
+	}
+
+	if _, updated, err := m.MarkTaskItemCompletedByGID("gid-1"); err != nil {
+		t.Fatalf("MarkTaskItemCompletedByGID: %v", err)
+	} else if !updated {
+		t.Fatal("expected completion to update progress")
+	}
+
+	taskAfter, err := m.GetTask(meta.ID)
+	if err != nil {
+		t.Fatalf("GetTask: %v", err)
+	}
+	if taskAfter.DownloadedSegments != 1 {
+		t.Fatalf("downloaded = %d, want 1", taskAfter.DownloadedSegments)
+	}
+	if taskAfter.Status != "stopping" {
+		t.Fatalf("status = %q, want stopping", taskAfter.Status)
+	}
+}
+
 func TestCreateTaskItemsPlaceholdersMarkSubmittingAndBind(t *testing.T) {
 	m := newTestManager(t)
 	meta := TaskMetadata{
@@ -291,6 +328,45 @@ func TestCreateTaskItemsPlaceholdersMarkSubmittingAndBind(t *testing.T) {
 	}
 	if !gid.Valid || gid.String != "gid-claimed" {
 		t.Fatalf("bound gid = (%v, %q), want (true, gid-claimed)", gid.Valid, gid.String)
+	}
+}
+
+func TestMarkTaskItemCompletedByFilenamePreservesStoppingStatus(t *testing.T) {
+	m := newTestManager(t)
+
+	meta := TaskMetadata{
+		ID:                 "task-stopping-file",
+		Name:               "stopping-file",
+		OriginalURL:        "https://example.com/stopping-file.m3u8",
+		TotalSegments:      1,
+		DownloadedSegments: 0,
+		CreatedTime:        time.Now(),
+		Status:             "stopping",
+	}
+	if err := m.CreateTask(meta); err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	if err := m.CreateTaskItemsPlaceholders(meta.ID, []playlist.DownloadItem{
+		{Filename: "00001.ts", URL: "https://example.com/1.ts", Type: "ts"},
+	}); err != nil {
+		t.Fatalf("CreateTaskItemsPlaceholders: %v", err)
+	}
+
+	if updated, err := m.MarkTaskItemCompletedByFilename(meta.ID, "00001.ts"); err != nil {
+		t.Fatalf("MarkTaskItemCompletedByFilename: %v", err)
+	} else if !updated {
+		t.Fatal("expected completion to update progress")
+	}
+
+	taskAfter, err := m.GetTask(meta.ID)
+	if err != nil {
+		t.Fatalf("GetTask: %v", err)
+	}
+	if taskAfter.DownloadedSegments != 1 {
+		t.Fatalf("downloaded = %d, want 1", taskAfter.DownloadedSegments)
+	}
+	if taskAfter.Status != "stopping" {
+		t.Fatalf("status = %q, want stopping", taskAfter.Status)
 	}
 }
 

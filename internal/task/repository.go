@@ -163,6 +163,25 @@ func (m *Manager) UpdateTaskStatus(id, status string) error {
 	return err
 }
 
+func (m *Manager) MarkTaskStopping(id string) (string, bool, error) {
+	meta, err := m.GetTask(id)
+	if err != nil {
+		return "", false, err
+	}
+
+	switch meta.Status {
+	case "stopped", "stopping":
+		return meta.Status, false, nil
+	case "downloading":
+		if err := m.UpdateTaskStatus(id, "stopping"); err != nil {
+			return "", false, err
+		}
+		return "stopping", true, nil
+	default:
+		return meta.Status, false, fmt.Errorf("only downloading tasks can be stopped")
+	}
+}
+
 func (m *Manager) UpdateTaskDownloadedSegments(id string, downloaded int) error {
 	query := `UPDATE tasks SET downloaded_segments = ? WHERE id = ?`
 	_, err := m.db.Exec(query, downloaded, id)
@@ -416,6 +435,18 @@ WHERE task_id = ? AND status IN (?, ?)
 	return int(affected), nil
 }
 
+func (m *Manager) ResetTaskItemToPending(taskID, filename string) error {
+	_, err := m.db.Exec(`
+UPDATE task_item
+SET status = ?,
+	aria2_gid = NULL,
+	last_error = '',
+	updated_time = datetime('now')
+WHERE task_id = ? AND filename = ? AND status IN (?, ?)
+`, taskItemStatusPending, taskID, filename, taskItemStatusSubmitting, taskItemStatusQueued)
+	return err
+}
+
 func (m *Manager) RecoverSubmittingTaskItems() error {
 	_, err := m.db.Exec(`
 UPDATE task_item
@@ -553,7 +584,7 @@ WHERE aria2_gid = ? AND status = 'queued'
 				ELSE downloaded_segments
 			END,
 			status = CASE
-				WHEN downloaded_segments + 1 >= total_segments THEN 'completed'
+				WHEN downloaded_segments + 1 >= total_segments AND status = 'downloading' THEN 'completed'
 				ELSE status
 			END
 		WHERE id = ?
@@ -620,7 +651,7 @@ WHERE task_id = ? AND filename = ? AND status != 'completed'
 					ELSE downloaded_segments
 				END,
 				status = CASE
-					WHEN downloaded_segments + 1 >= total_segments THEN 'completed'
+					WHEN downloaded_segments + 1 >= total_segments AND status = 'downloading' THEN 'completed'
 					ELSE status
 				END
 			WHERE id = ?

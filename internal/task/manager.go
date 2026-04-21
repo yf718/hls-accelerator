@@ -84,6 +84,14 @@ func (m *Manager) GetTasks() ([]map[string]interface{}, error) {
 }
 
 func (m *Manager) StopTask(id string) error {
+	status, _, err := m.MarkTaskStopping(id)
+	if err != nil {
+		return err
+	}
+	if status == "stopped" {
+		return nil
+	}
+
 	// Stop only downloads that are still active/waiting in aria2. Historical
 	// completed GIDs do not consume network resources and make stop needlessly slow.
 	if m.aria2 != nil {

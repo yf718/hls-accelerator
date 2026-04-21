@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"sync"
 	"strings"
 	"time"
 
@@ -27,6 +29,14 @@ type Server struct {
 	aria2       *downloader.Aria2Client
 	client      *http.Client
 	taskManager *task.Manager
+	dispatchMu  sync.Mutex
+	dispatchSeq uint64
+	dispatches  map[string]dispatchState
+}
+
+type dispatchState struct {
+	token  uint64
+	cancel context.CancelFunc
 }
 
 func NewServer() (*Server, error) {
@@ -49,6 +59,7 @@ func NewServer() (*Server, error) {
 			Timeout: 30 * time.Second,
 		},
 		taskManager: tm,
+		dispatches:  make(map[string]dispatchState),
 	}, nil
 }
 
@@ -66,7 +77,7 @@ func (s *Server) Start() error {
 	mux.HandleFunc("POST /api/tasks/sync", s.taskManager.HandleSyncProgress)
 	mux.HandleFunc("POST /api/tasks/{id}/sync", s.handleSyncTask)
 	mux.HandleFunc("DELETE /api/tasks/{id}", s.taskManager.HandleDelete)
-	mux.HandleFunc("POST /api/tasks/{id}/stop", s.taskManager.HandleStop)
+	mux.HandleFunc("POST /api/tasks/{id}/stop", s.handleStopTask)
 
 	// Proxy Endpoints
 	mux.HandleFunc("/proxy/m3u8/", s.handleM3U8)
@@ -391,10 +402,61 @@ func (s *Server) triggerDownloads(taskID string, items []playlist.DownloadItem) 
 		}
 	}
 
-	s.dispatchPendingTaskItems(taskID)
+	s.startDispatchPendingTaskItems(taskID)
 }
 
-func (s *Server) dispatchPendingTaskItems(taskID string) {
+func (s *Server) startDispatchPendingTaskItems(taskID string) {
+	s.cancelDispatchPendingTaskItems(taskID)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	s.dispatchMu.Lock()
+	s.dispatchSeq++
+	token := s.dispatchSeq
+	s.dispatches[taskID] = dispatchState{token: token, cancel: cancel}
+	s.dispatchMu.Unlock()
+
+	go func() {
+		defer s.finishDispatchPendingTaskItems(taskID, token)
+		s.dispatchPendingTaskItems(ctx, taskID)
+	}()
+}
+
+func (s *Server) cancelDispatchPendingTaskItems(taskID string) {
+	s.dispatchMu.Lock()
+	state, ok := s.dispatches[taskID]
+	delete(s.dispatches, taskID)
+	s.dispatchMu.Unlock()
+
+	if ok && state.cancel != nil {
+		state.cancel()
+	}
+}
+
+func (s *Server) finishDispatchPendingTaskItems(taskID string, token uint64) {
+	s.dispatchMu.Lock()
+	current, ok := s.dispatches[taskID]
+	if ok && current.token == token {
+		delete(s.dispatches, taskID)
+	}
+	s.dispatchMu.Unlock()
+}
+
+func (s *Server) canDispatchTask(ctx context.Context, taskID string) bool {
+	select {
+	case <-ctx.Done():
+		return false
+	default:
+	}
+
+	meta, err := s.taskManager.GetTask(taskID)
+	if err != nil {
+		log.Printf("canDispatchTask: GetTask failed task=%s: %v", taskID, err)
+		return false
+	}
+	return meta.Status == "downloading"
+}
+
+func (s *Server) dispatchPendingTaskItems(ctx context.Context, taskID string) {
 	dir := cache.GetTaskDir(taskID)
 	headers := config.GlobalConfig.Headers
 
@@ -405,6 +467,10 @@ func (s *Server) dispatchPendingTaskItems(taskID string) {
 	}
 
 	for _, item := range pending {
+		if !s.canDispatchTask(ctx, taskID) {
+			return
+		}
+
 		marked, err := s.taskManager.MarkTaskItemSubmitting(taskID, item.Filename)
 		if err != nil {
 			log.Printf("dispatchPendingTaskItems: MarkTaskItemSubmitting failed task=%s file=%s: %v", taskID, item.Filename, err)
@@ -412,6 +478,12 @@ func (s *Server) dispatchPendingTaskItems(taskID string) {
 		}
 		if !marked {
 			continue
+		}
+		if !s.canDispatchTask(ctx, taskID) {
+			if err := s.taskManager.ResetTaskItemToPending(taskID, item.Filename); err != nil {
+				log.Printf("dispatchPendingTaskItems: ResetTaskItemToPending failed after cancel task=%s file=%s: %v", taskID, item.Filename, err)
+			}
+			return
 		}
 
 		if cache.FileExists(taskID, item.Filename) {
@@ -440,6 +512,15 @@ func (s *Server) dispatchPendingTaskItems(taskID string) {
 				log.Printf("dispatchPendingTaskItems: MarkTaskItemSubmitFailed failed task=%s file=%s: %v", taskID, item.Filename, markErr)
 			}
 			continue
+		}
+		if !s.canDispatchTask(ctx, taskID) {
+			if rmErr := s.aria2.ForceRemove(actualGID); rmErr != nil {
+				log.Printf("dispatchPendingTaskItems: ForceRemove canceled gid=%s: %v", actualGID, rmErr)
+			}
+			if resetErr := s.taskManager.ResetTaskItemToPending(taskID, item.Filename); resetErr != nil {
+				log.Printf("dispatchPendingTaskItems: ResetTaskItemToPending failed after AddUri task=%s file=%s: %v", taskID, item.Filename, resetErr)
+			}
+			return
 		}
 
 		if err := s.taskManager.BindTaskItemToAria2(taskID, item.Filename, actualGID); err != nil {
@@ -520,7 +601,44 @@ func (s *Server) handleSyncTask(w http.ResponseWriter, r *http.Request) {
 		"task_id":      taskID,
 	})
 
-	go s.dispatchPendingTaskItems(taskID)
+	s.startDispatchPendingTaskItems(taskID)
+}
+
+func (s *Server) handleStopTask(w http.ResponseWriter, r *http.Request) {
+	taskID := r.PathValue("id")
+	if taskID == "" {
+		http.Error(w, "Invalid ID", http.StatusBadRequest)
+		return
+	}
+
+	status, changed, err := s.taskManager.MarkTaskStopping(taskID)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			http.Error(w, "Task not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+
+	s.cancelDispatchPendingTaskItems(taskID)
+
+	if status == "stopped" {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	if !changed && status == "stopping" {
+		w.WriteHeader(http.StatusAccepted)
+		return
+	}
+
+	go func() {
+		if err := s.taskManager.StopTask(taskID); err != nil {
+			log.Printf("handleStopTask: StopTask failed task=%s: %v", taskID, err)
+		}
+	}()
+
+	w.WriteHeader(http.StatusAccepted)
 }
 
 // startAutoCleanup starts a goroutine that runs cleanup at midnight every day

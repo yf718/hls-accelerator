@@ -788,13 +788,13 @@
             if (pollTimer) {
                 clearTimeout(pollTimer);
             }
-            const hasBusyTask = tasks.some(task => task.status === 'deleting' || task.status === 'delete_failed') || pendingDeletes.size > 0;
+            const hasBusyTask = tasks.some(task => task.status === 'deleting' || task.status === 'delete_failed' || task.status === 'stopping') || pendingDeletes.size > 0;
             const delay = hasBusyTask ? BUSY_POLL_INTERVAL : DEFAULT_POLL_INTERVAL;
             pollTimer = setTimeout(fetchTasks, delay);
         }
 
         function updateStats() {
-            const activeCount = tasks.filter(task => task.status === 'downloading' || task.status === 'deleting').length;
+            const activeCount = tasks.filter(task => task.status === 'downloading' || task.status === 'deleting' || task.status === 'stopping').length;
             elStatActive.innerText = activeCount;
             elStatStorage.innerText = `${tasks.length} Tasks`;
         }
@@ -820,6 +820,13 @@
                     statusLabel = "Completed";
                     statusColor = "var(--success)";
                     progressBarColor = "var(--success)";
+                } else if (task.status === 'stopping') {
+                    statusLabel = "Stopping";
+                    statusColor = "var(--warning)";
+                    progressTextRight = "Stopping";
+                    progressExtraText = "Download submission is being canceled";
+                    cardStateClass = "is-deleting";
+                    isProgressIndeterminate = true;
                 } else if (task.status === 'stopped') {
                     statusLabel = "Stopped";
                     statusColor = "var(--danger)";
@@ -845,7 +852,7 @@
 
                 // Action Buttons
                 let actionButtons = '';
-                const isDeleting = task.status === 'deleting';
+                const isDeleting = task.status === 'deleting' || task.status === 'stopping';
 
                 actionButtons += `
                      <a href="/proxy/m3u8/${encodeURIComponent(task.original_url)}" target="_blank" class="btn btn-primary" style="text-decoration:none; ${isDeleting ? 'pointer-events:none; opacity:0.55;' : ''}">
@@ -864,7 +871,7 @@
                         </svg>
                         Stop
                     </button>`;
-                } else if (task.status === 'deleting') {
+                } else if (task.status === 'deleting' || task.status === 'stopping') {
                     actionButtons += `
                     <button class="btn btn-primary" disabled>
                         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -877,7 +884,7 @@
                             <path d="m4.93 19.07 2.83-2.83"></path>
                             <path d="m16.24 7.76 2.83-2.83"></path>
                         </svg>
-                        Deleting
+                        ${task.status === 'stopping' ? 'Stopping' : 'Deleting'}
                     </button>`;
                 } else if (task.status === 'stopped') {
                     actionButtons += `
@@ -935,7 +942,7 @@
                     <div class="progress-bar ${isProgressIndeterminate ? 'progress-indeterminate' : ''}" style="width: ${isProgressIndeterminate ? 100 : percent}%; ${progressBarColor ? 'background:' + progressBarColor : ''}"></div>
                 </div>
                 <div class="progress-text">
-                    <span style="color: ${statusColor};">${statusLabel === 'Delete Failed' ? 'Background cleanup needs attention' : statusLabel === 'Deleting' ? 'Delete request accepted' : task.status === 'downloading' ? 'Download in progress' : statusLabel}</span>
+                    <span style="color: ${statusColor};">${statusLabel === 'Delete Failed' ? 'Background cleanup needs attention' : statusLabel === 'Deleting' ? 'Delete request accepted' : statusLabel === 'Stopping' ? 'Stop request accepted' : task.status === 'downloading' ? 'Download in progress' : statusLabel}</span>
                     <span style="color: ${statusColor}">${progressTextRight}</span>
                 </div>
                 <div class="btn-group">
@@ -966,7 +973,7 @@
             try {
                 const res = await fetch(`${API_BASE}/tasks/${id}/stop`, { method: 'POST' });
                 if (res.ok) {
-                    showToast('Task stopped');
+                    showToast(res.status === 202 ? 'Task stopping' : 'Task stopped');
                     fetchTasks();
                 } else {
                     showToast('Failed to stop task', true);
