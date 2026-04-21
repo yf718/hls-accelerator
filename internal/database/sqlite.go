@@ -22,9 +22,10 @@ func Init(dataDir string) (*sql.DB, error) {
 		return nil, err
 	}
 
-	// Enable WAL mode and set busy timeout for better concurrency and performance
+	// Enable WAL mode and set busy timeout for better concurrency and performance.
+	// High-concurrency task_item state transitions can exceed 5s under load.
 	_, err = db.Exec(`
-		PRAGMA busy_timeout = 5000;
+		PRAGMA busy_timeout = 15000;
 		PRAGMA journal_mode = WAL;
 		PRAGMA foreign_keys = ON;
 	`)

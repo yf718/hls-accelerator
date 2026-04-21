@@ -87,17 +87,6 @@ func (s *Server) startDownloadFromURL(addReq task.AddTaskRequest) error {
 		taskName = task.DeriveTaskName(rawURL)
 	}
 
-	// Check if task exists (for idempotency and recursive calls)
-	exists, status, err := s.taskManager.CheckTaskExists(cache.GetTaskID(rawURL))
-	if err != nil {
-		return err
-	}
-	if exists {
-		if status == "downloading" || status == "completed" {
-			return fmt.Errorf("task already exists: %s", status)
-		}
-	}
-
 	httpReq, _ := http.NewRequest("GET", rawURL, nil)
 	for k, v := range config.GlobalConfig.Headers {
 		httpReq.Header.Set(k, v)
@@ -167,9 +156,16 @@ func (s *Server) startDownloadFromURL(addReq task.AddTaskRequest) error {
 			Status:         "downloading",
 			ProxiedContent: updated,
 		}
-		// Use DB instead of file
-		if taskErr := s.taskManager.CreateTask(meta); taskErr != nil {
+		created, taskErr := s.taskManager.TryCreateTask(meta)
+		if taskErr != nil {
 			return taskErr
+		}
+		if !created {
+			_, status, err := s.taskManager.CheckTaskExists(taskID)
+			if err != nil {
+				return fmt.Errorf("task already exists")
+			}
+			return fmt.Errorf("task already exists: %s", status)
 		}
 
 		s.triggerDownloads(taskID, items)
@@ -297,39 +293,28 @@ func (s *Server) handleVariantPlaylist(w http.ResponseWriter, r *http.Request, m
 	// Rewrite playlist and get download items
 	updated, items, total := playlist.RewriteVariant(mediaPl, proxyBase, taskID, baseURL)
 
-	// Check if task already exists
-	exists, status, err := s.taskManager.CheckTaskExists(taskID)
-	if err != nil {
-		log.Printf("Failed to check task existence for %s: %v", taskID, err)
-		// Continue anyway - we'll try to create/update
-	}
+	// Let the unique index arbitrate ownership. Only the creator triggers downloads.
+	go func() {
+		meta := task.TaskMetadata{
+			ID:             taskID,
+			Name:           task.DeriveTaskName(originURL),
+			OriginalURL:    originURL,
+			TotalSegments:  total,
+			CreatedTime:    time.Now(),
+			Status:         "downloading",
+			ProxiedContent: updated,
+		}
+		created, err := s.taskManager.TryCreateTask(meta)
+		if err != nil {
+			log.Printf("Failed to create task %s: %v", taskID, err)
+			return
+		}
+		if !created {
+			return
+		}
 
-	// Determine if we should start a new task
-	// If task exists and is downloading/completed, proxied content was already saved during creation
-	shouldStartNewTask := !exists || (status != "downloading" && status != "completed")
-
-	if shouldStartNewTask {
-		// Start new task asynchronously
-		go func() {
-			meta := task.TaskMetadata{
-				ID:             taskID,
-				Name:           task.DeriveTaskName(originURL),
-				OriginalURL:    originURL,
-				TotalSegments:  total,
-				CreatedTime:    time.Now(),
-				Status:         "downloading",
-				ProxiedContent: updated,
-			}
-			if err := s.taskManager.CreateTask(meta); err != nil {
-				log.Printf("Failed to create task %s: %v", taskID, err)
-				return
-			}
-
-			// Trigger downloads
-			s.triggerDownloads(taskID, items)
-		}()
-	}
-	// If task already exists, proxied content was saved during creation and unlikely to change
+		s.triggerDownloads(taskID, items)
+	}()
 
 	// Return rewritten playlist immediately
 	s.writeM3U8Response(w, updated)
@@ -397,24 +382,55 @@ func (s *Server) handleKey(w http.ResponseWriter, r *http.Request) {
 func (s *Server) triggerDownloads(taskID string, items []playlist.DownloadItem) {
 	dir := cache.GetTaskDir(taskID)
 	headers := config.GlobalConfig.Headers
+	if len(items) == 0 {
+		return
+	}
+	if err := s.taskManager.CreateTaskItemsPlaceholders(taskID, items); err != nil {
+		log.Printf("triggerDownloads: CreateTaskItemsPlaceholders failed task=%s: %v", taskID, err)
+		return
+	}
 
-	for _, item := range items {
-		// Skip if file already exists
+	claimed, err := s.taskManager.ClaimPendingTaskItems(taskID, len(items))
+	if err != nil {
+		log.Printf("triggerDownloads: ClaimPendingTaskItems failed task=%s: %v", taskID, err)
+		return
+	}
+
+	for _, item := range claimed {
 		if cache.FileExists(taskID, item.Filename) {
+			if !cache.FileExists(taskID, item.Filename+".aria2") {
+				updated, err := s.taskManager.MarkTaskItemCompletedByFilename(taskID, item.Filename)
+				if err != nil {
+					log.Printf("triggerDownloads: MarkTaskItemCompletedByFilename failed task=%s file=%s: %v", taskID, item.Filename, err)
+				} else if updated {
+					log.Printf("triggerDownloads: marked existing file as completed task=%s file=%s", taskID, item.Filename)
+				}
+				continue
+			}
+			if err := s.taskManager.MarkTaskItemSubmitFailed(taskID, item.Filename, "local partial file exists"); err != nil {
+				log.Printf("triggerDownloads: MarkTaskItemSubmitFailed partial file failed task=%s file=%s: %v", taskID, item.Filename, err)
+			}
 			continue
 		}
 
-		// Let aria2 generate GID automatically
 		actualGID, err := s.aria2.AddUri(item.URL, dir, item.Filename, headers, "")
 		if err != nil {
-			// Ignore "GID already used" or similar errors
-			// logging might be noisy if re-adding existing tasks
-			// log.Printf("Failed to add download for %s: %v", item.Filename, err)
+			log.Printf("triggerDownloads: aria2.addUri failed task=%s file=%s: %v", taskID, item.Filename, err)
+			if markErr := s.taskManager.MarkTaskItemSubmitFailed(taskID, item.Filename, err.Error()); markErr != nil {
+				log.Printf("triggerDownloads: MarkTaskItemSubmitFailed failed task=%s file=%s: %v", taskID, item.Filename, markErr)
+			}
 			continue
 		}
 
-		// Save the actual GID returned by aria2 to database
-		s.taskManager.CreateTaskItem(taskID, item.Filename, actualGID, item.URL, item.Type)
+		if err := s.taskManager.BindTaskItemToAria2(taskID, item.Filename, actualGID); err != nil {
+			log.Printf("triggerDownloads: BindTaskItemToAria2 failed task=%s file=%s gid=%s: %v", taskID, item.Filename, actualGID, err)
+			if rmErr := s.aria2.ForceRemove(actualGID); rmErr != nil {
+				log.Printf("triggerDownloads: ForceRemove orphan gid=%s after bind error: %v", actualGID, rmErr)
+			}
+			if markErr := s.taskManager.MarkTaskItemSubmitFailed(taskID, item.Filename, err.Error()); markErr != nil {
+				log.Printf("triggerDownloads: MarkTaskItemSubmitFailed after bind error failed task=%s file=%s: %v", taskID, item.Filename, markErr)
+			}
+		}
 	}
 }
 

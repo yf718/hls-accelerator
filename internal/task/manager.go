@@ -47,6 +47,9 @@ func NewManager(aria2 *downloader.Aria2Client, db *sql.DB) (*Manager, error) {
 	if err := m.InitTable(); err != nil {
 		return nil, err
 	}
+	if err := m.RecoverSubmittingTaskItems(); err != nil {
+		return nil, err
+	}
 	m.startProgressTracking()
 	return m, nil
 }
@@ -549,6 +552,16 @@ func (m *Manager) SyncTaskProgress() (int, error) {
 				continue
 			}
 			if cache.FileExists(meta.ID, item.Filename+".aria2") {
+				continue
+			}
+			if item.Aria2GID == "" {
+				updated, err := m.MarkTaskItemCompletedByFilename(meta.ID, item.Filename)
+				if err != nil {
+					return updatedCount, fmt.Errorf("failed to sync task=%s file=%s: %w", meta.ID, item.Filename, err)
+				}
+				if updated {
+					updatedCount++
+				}
 				continue
 			}
 			_, updated, err := m.MarkTaskItemCompletedByGID(item.Aria2GID)

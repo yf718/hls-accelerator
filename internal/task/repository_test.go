@@ -2,6 +2,7 @@ package task
 
 import (
 	"database/sql"
+	playlist "hls-accelerator/internal/m3u8"
 	"testing"
 	"time"
 
@@ -90,6 +91,35 @@ func TestMarkTaskItemCompletedByGIDIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestTryCreateTaskUsesUniqueIndexAsArbitration(t *testing.T) {
+	m := newTestManager(t)
+	meta := TaskMetadata{
+		ID:                 "task-unique",
+		Name:               "unique-task",
+		OriginalURL:        "https://example.com/unique.m3u8",
+		TotalSegments:      1,
+		DownloadedSegments: 0,
+		CreatedTime:        time.Now(),
+		Status:             "downloading",
+	}
+
+	created, err := m.TryCreateTask(meta)
+	if err != nil {
+		t.Fatalf("TryCreateTask first: %v", err)
+	}
+	if !created {
+		t.Fatal("expected first TryCreateTask to create task")
+	}
+
+	created, err = m.TryCreateTask(meta)
+	if err != nil {
+		t.Fatalf("TryCreateTask second: %v", err)
+	}
+	if created {
+		t.Fatal("expected duplicate TryCreateTask to lose arbitration")
+	}
+}
+
 func TestEnqueueProgressNotificationDedupesInflightAndRecent(t *testing.T) {
 	m := newTestManager(t)
 	m.progressNotifyCh = make(chan string, 2)
@@ -171,5 +201,218 @@ func TestMarkTaskItemCompletedByGIDDoesNotCountKeysTowardCompletion(t *testing.T
 	}
 	if taskAfterSegment.Status != "completed" {
 		t.Fatalf("status after segment completion = %q, want completed", taskAfterSegment.Status)
+	}
+}
+
+func TestCreateTaskItemsPlaceholdersClaimAndBind(t *testing.T) {
+	m := newTestManager(t)
+	meta := TaskMetadata{
+		ID:                 "task-placeholders",
+		Name:               "placeholder-task",
+		OriginalURL:        "https://example.com/test.m3u8",
+		TotalSegments:      2,
+		DownloadedSegments: 0,
+		CreatedTime:        time.Now(),
+		Status:             "downloading",
+	}
+	if err := m.CreateTask(meta); err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+
+	items := []playlist.DownloadItem{
+		{Filename: "00001.ts", URL: "https://example.com/1.ts", Type: "ts"},
+		{Filename: "00002.ts", URL: "https://example.com/2.ts", Type: "ts"},
+	}
+	if err := m.CreateTaskItemsPlaceholders(meta.ID, items); err != nil {
+		t.Fatalf("CreateTaskItemsPlaceholders: %v", err)
+	}
+
+	taskItems, err := m.GetTaskItems(meta.ID)
+	if err != nil {
+		t.Fatalf("GetTaskItems: %v", err)
+	}
+	if len(taskItems) != 2 {
+		t.Fatalf("len(taskItems) = %d, want 2", len(taskItems))
+	}
+	for _, item := range taskItems {
+		if item.Status != taskItemStatusPending {
+			t.Fatalf("placeholder status = %q, want %q", item.Status, taskItemStatusPending)
+		}
+		if item.Aria2GID != "" {
+			t.Fatalf("placeholder gid = %q, want empty", item.Aria2GID)
+		}
+	}
+
+	claimed, err := m.ClaimPendingTaskItems(meta.ID, 1)
+	if err != nil {
+		t.Fatalf("ClaimPendingTaskItems: %v", err)
+	}
+	if len(claimed) != 1 {
+		t.Fatalf("len(claimed) = %d, want 1", len(claimed))
+	}
+	if claimed[0].Status != taskItemStatusSubmitting {
+		t.Fatalf("claimed status = %q, want %q", claimed[0].Status, taskItemStatusSubmitting)
+	}
+
+	if err := m.BindTaskItemToAria2(meta.ID, claimed[0].Filename, "gid-claimed"); err != nil {
+		t.Fatalf("BindTaskItemToAria2: %v", err)
+	}
+
+	var status string
+	var gid sql.NullString
+	err = m.db.QueryRow(`SELECT status, aria2_gid FROM task_item WHERE task_id = ? AND filename = ?`, meta.ID, claimed[0].Filename).Scan(&status, &gid)
+	if err != nil {
+		t.Fatalf("query bound item: %v", err)
+	}
+	if status != taskItemStatusQueued {
+		t.Fatalf("bound status = %q, want %q", status, taskItemStatusQueued)
+	}
+	if !gid.Valid || gid.String != "gid-claimed" {
+		t.Fatalf("bound gid = (%v, %q), want (true, gid-claimed)", gid.Valid, gid.String)
+	}
+}
+
+func TestCreateTaskItemsPlaceholdersResetsFailedItemsForRetry(t *testing.T) {
+	m := newTestManager(t)
+	meta := TaskMetadata{
+		ID:                 "task-retry",
+		Name:               "retry-task",
+		OriginalURL:        "https://example.com/retry.m3u8",
+		TotalSegments:      1,
+		DownloadedSegments: 0,
+		CreatedTime:        time.Now(),
+		Status:             "downloading",
+	}
+	if err := m.CreateTask(meta); err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+
+	items := []playlist.DownloadItem{
+		{Filename: "00001.ts", URL: "https://example.com/1.ts", Type: "ts"},
+	}
+	if err := m.CreateTaskItemsPlaceholders(meta.ID, items); err != nil {
+		t.Fatalf("CreateTaskItemsPlaceholders first: %v", err)
+	}
+
+	claimed, err := m.ClaimPendingTaskItems(meta.ID, 10)
+	if err != nil {
+		t.Fatalf("ClaimPendingTaskItems first: %v", err)
+	}
+	if len(claimed) != 1 {
+		t.Fatalf("len(claimed first) = %d, want 1", len(claimed))
+	}
+
+	if err := m.MarkTaskItemSubmitFailed(meta.ID, claimed[0].Filename, "aria2 timeout"); err != nil {
+		t.Fatalf("MarkTaskItemSubmitFailed: %v", err)
+	}
+
+	if err := m.CreateTaskItemsPlaceholders(meta.ID, items); err != nil {
+		t.Fatalf("CreateTaskItemsPlaceholders second: %v", err)
+	}
+
+	var status string
+	var gid sql.NullString
+	var retryCount int
+	var lastErr string
+	err = m.db.QueryRow(`
+SELECT status, aria2_gid, retry_count, last_error
+FROM task_item
+WHERE task_id = ? AND filename = ?
+`, meta.ID, claimed[0].Filename).Scan(&status, &gid, &retryCount, &lastErr)
+	if err != nil {
+		t.Fatalf("query retried item: %v", err)
+	}
+	if status != taskItemStatusPending {
+		t.Fatalf("retry status = %q, want %q", status, taskItemStatusPending)
+	}
+	if gid.Valid {
+		t.Fatalf("retry gid valid = %v, want false", gid.Valid)
+	}
+	if retryCount != 1 {
+		t.Fatalf("retryCount = %d, want 1", retryCount)
+	}
+	if lastErr != "" {
+		t.Fatalf("lastErr = %q, want empty", lastErr)
+	}
+
+	reclaimed, err := m.ClaimPendingTaskItems(meta.ID, 10)
+	if err != nil {
+		t.Fatalf("ClaimPendingTaskItems second: %v", err)
+	}
+	if len(reclaimed) != 1 {
+		t.Fatalf("len(reclaimed) = %d, want 1", len(reclaimed))
+	}
+}
+
+func TestGetTaskItemGIDsSkipsEmptyValues(t *testing.T) {
+	m := newTestManager(t)
+	meta := TaskMetadata{
+		ID:                 "task-gids",
+		Name:               "gid-task",
+		OriginalURL:        "https://example.com/gid.m3u8",
+		TotalSegments:      1,
+		DownloadedSegments: 0,
+		CreatedTime:        time.Now(),
+		Status:             "downloading",
+	}
+	if err := m.CreateTask(meta); err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+
+	if err := m.CreateTaskItemsPlaceholders(meta.ID, []playlist.DownloadItem{
+		{Filename: "00001.ts", URL: "https://example.com/1.ts", Type: "ts"},
+	}); err != nil {
+		t.Fatalf("CreateTaskItemsPlaceholders: %v", err)
+	}
+	if err := m.CreateTaskItem(meta.ID, "00002.ts", "gid-2", "https://example.com/2.ts", "ts"); err != nil {
+		t.Fatalf("CreateTaskItem: %v", err)
+	}
+
+	gids, err := m.GetTaskItemGIDs(meta.ID)
+	if err != nil {
+		t.Fatalf("GetTaskItemGIDs: %v", err)
+	}
+	if len(gids) != 1 || gids[0] != "gid-2" {
+		t.Fatalf("gids = %#v, want [gid-2]", gids)
+	}
+}
+
+func TestMarkTaskItemCompletedByFilenameCountsProgressWithoutGID(t *testing.T) {
+	m := newTestManager(t)
+	meta := TaskMetadata{
+		ID:                 "task-filename-complete",
+		Name:               "filename-complete",
+		OriginalURL:        "https://example.com/file.m3u8",
+		TotalSegments:      1,
+		DownloadedSegments: 0,
+		CreatedTime:        time.Now(),
+		Status:             "downloading",
+	}
+	if err := m.CreateTask(meta); err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	if err := m.CreateTaskItemsPlaceholders(meta.ID, []playlist.DownloadItem{
+		{Filename: "00001.ts", URL: "https://example.com/1.ts", Type: "ts"},
+	}); err != nil {
+		t.Fatalf("CreateTaskItemsPlaceholders: %v", err)
+	}
+
+	updated, err := m.MarkTaskItemCompletedByFilename(meta.ID, "00001.ts")
+	if err != nil {
+		t.Fatalf("MarkTaskItemCompletedByFilename: %v", err)
+	}
+	if !updated {
+		t.Fatal("expected filename completion to update progress")
+	}
+
+	taskAfter, err := m.GetTask(meta.ID)
+	if err != nil {
+		t.Fatalf("GetTask: %v", err)
+	}
+	if taskAfter.DownloadedSegments != 1 {
+		t.Fatalf("downloaded = %d, want 1", taskAfter.DownloadedSegments)
+	}
+	if taskAfter.Status != "completed" {
+		t.Fatalf("status = %q, want completed", taskAfter.Status)
 	}
 }
