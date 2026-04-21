@@ -204,7 +204,7 @@ func TestMarkTaskItemCompletedByGIDDoesNotCountKeysTowardCompletion(t *testing.T
 	}
 }
 
-func TestCreateTaskItemsPlaceholdersClaimAndBind(t *testing.T) {
+func TestCreateTaskItemsPlaceholdersMarkSubmittingAndBind(t *testing.T) {
 	m := newTestManager(t)
 	meta := TaskMetadata{
 		ID:                 "task-placeholders",
@@ -243,24 +243,46 @@ func TestCreateTaskItemsPlaceholdersClaimAndBind(t *testing.T) {
 		}
 	}
 
-	claimed, err := m.ClaimPendingTaskItems(meta.ID, 1)
+	pending, err := m.ListPendingTaskItems(meta.ID)
 	if err != nil {
-		t.Fatalf("ClaimPendingTaskItems: %v", err)
+		t.Fatalf("ListPendingTaskItems: %v", err)
 	}
-	if len(claimed) != 1 {
-		t.Fatalf("len(claimed) = %d, want 1", len(claimed))
-	}
-	if claimed[0].Status != taskItemStatusSubmitting {
-		t.Fatalf("claimed status = %q, want %q", claimed[0].Status, taskItemStatusSubmitting)
+	if len(pending) != 2 {
+		t.Fatalf("len(pending) = %d, want 2", len(pending))
 	}
 
-	if err := m.BindTaskItemToAria2(meta.ID, claimed[0].Filename, "gid-claimed"); err != nil {
+	marked, err := m.MarkTaskItemSubmitting(meta.ID, pending[0].Filename)
+	if err != nil {
+		t.Fatalf("MarkTaskItemSubmitting: %v", err)
+	}
+	if !marked {
+		t.Fatal("expected first pending item to become submitting")
+	}
+
+	taskItems, err = m.GetTaskItems(meta.ID)
+	if err != nil {
+		t.Fatalf("GetTaskItems after mark: %v", err)
+	}
+	var submitting TaskItem
+	foundSubmitting := false
+	for _, item := range taskItems {
+		if item.Status == taskItemStatusSubmitting {
+			submitting = item
+			foundSubmitting = true
+			break
+		}
+	}
+	if !foundSubmitting {
+		t.Fatal("expected one task item in submitting state")
+	}
+
+	if err := m.BindTaskItemToAria2(meta.ID, submitting.Filename, "gid-claimed"); err != nil {
 		t.Fatalf("BindTaskItemToAria2: %v", err)
 	}
 
 	var status string
 	var gid sql.NullString
-	err = m.db.QueryRow(`SELECT status, aria2_gid FROM task_item WHERE task_id = ? AND filename = ?`, meta.ID, claimed[0].Filename).Scan(&status, &gid)
+	err = m.db.QueryRow(`SELECT status, aria2_gid FROM task_item WHERE task_id = ? AND filename = ?`, meta.ID, submitting.Filename).Scan(&status, &gid)
 	if err != nil {
 		t.Fatalf("query bound item: %v", err)
 	}
@@ -294,15 +316,23 @@ func TestCreateTaskItemsPlaceholdersResetsFailedItemsForRetry(t *testing.T) {
 		t.Fatalf("CreateTaskItemsPlaceholders first: %v", err)
 	}
 
-	claimed, err := m.ClaimPendingTaskItems(meta.ID, 10)
+	pending, err := m.ListPendingTaskItems(meta.ID)
 	if err != nil {
-		t.Fatalf("ClaimPendingTaskItems first: %v", err)
+		t.Fatalf("ListPendingTaskItems first: %v", err)
 	}
-	if len(claimed) != 1 {
-		t.Fatalf("len(claimed first) = %d, want 1", len(claimed))
+	if len(pending) != 1 {
+		t.Fatalf("len(pending first) = %d, want 1", len(pending))
 	}
 
-	if err := m.MarkTaskItemSubmitFailed(meta.ID, claimed[0].Filename, "aria2 timeout"); err != nil {
+	marked, err := m.MarkTaskItemSubmitting(meta.ID, pending[0].Filename)
+	if err != nil {
+		t.Fatalf("MarkTaskItemSubmitting first: %v", err)
+	}
+	if !marked {
+		t.Fatal("expected pending item to become submitting before failure")
+	}
+
+	if err := m.MarkTaskItemSubmitFailed(meta.ID, pending[0].Filename, "aria2 timeout"); err != nil {
 		t.Fatalf("MarkTaskItemSubmitFailed: %v", err)
 	}
 
@@ -318,7 +348,7 @@ func TestCreateTaskItemsPlaceholdersResetsFailedItemsForRetry(t *testing.T) {
 SELECT status, aria2_gid, retry_count, last_error
 FROM task_item
 WHERE task_id = ? AND filename = ?
-`, meta.ID, claimed[0].Filename).Scan(&status, &gid, &retryCount, &lastErr)
+`, meta.ID, pending[0].Filename).Scan(&status, &gid, &retryCount, &lastErr)
 	if err != nil {
 		t.Fatalf("query retried item: %v", err)
 	}
@@ -335,12 +365,60 @@ WHERE task_id = ? AND filename = ?
 		t.Fatalf("lastErr = %q, want empty", lastErr)
 	}
 
-	reclaimed, err := m.ClaimPendingTaskItems(meta.ID, 10)
+	reclaimed, err := m.ListPendingTaskItems(meta.ID)
 	if err != nil {
-		t.Fatalf("ClaimPendingTaskItems second: %v", err)
+		t.Fatalf("ListPendingTaskItems second: %v", err)
 	}
 	if len(reclaimed) != 1 {
 		t.Fatalf("len(reclaimed) = %d, want 1", len(reclaimed))
+	}
+}
+
+func TestResetFailedTaskItemsToPending(t *testing.T) {
+	m := newTestManager(t)
+	meta := TaskMetadata{
+		ID:                 "task-reset-failed",
+		Name:               "reset-failed",
+		OriginalURL:        "https://example.com/reset.m3u8",
+		TotalSegments:      1,
+		DownloadedSegments: 0,
+		CreatedTime:        time.Now(),
+		Status:             "downloading",
+	}
+	if err := m.CreateTask(meta); err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	if err := m.CreateTaskItemsPlaceholders(meta.ID, []playlist.DownloadItem{
+		{Filename: "00001.ts", URL: "https://example.com/1.ts", Type: "ts"},
+	}); err != nil {
+		t.Fatalf("CreateTaskItemsPlaceholders: %v", err)
+	}
+
+	marked, err := m.MarkTaskItemSubmitting(meta.ID, "00001.ts")
+	if err != nil {
+		t.Fatalf("MarkTaskItemSubmitting: %v", err)
+	}
+	if !marked {
+		t.Fatal("expected task item to enter submitting")
+	}
+	if err := m.MarkTaskItemSubmitFailed(meta.ID, "00001.ts", "temporary error"); err != nil {
+		t.Fatalf("MarkTaskItemSubmitFailed: %v", err)
+	}
+
+	reset, err := m.ResetFailedTaskItemsToPending(meta.ID)
+	if err != nil {
+		t.Fatalf("ResetFailedTaskItemsToPending: %v", err)
+	}
+	if reset != 1 {
+		t.Fatalf("reset = %d, want 1", reset)
+	}
+
+	pending, err := m.ListPendingTaskItems(meta.ID)
+	if err != nil {
+		t.Fatalf("ListPendingTaskItems: %v", err)
+	}
+	if len(pending) != 1 {
+		t.Fatalf("len(pending) = %d, want 1", len(pending))
 	}
 }
 

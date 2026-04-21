@@ -16,12 +16,6 @@ const (
 	taskItemStatusFailed     = "failed"
 )
 
-type tableColumnInfo struct {
-	Name         string
-	NotNull      bool
-	DefaultValue sql.NullString
-}
-
 func isSQLiteBusyOrLocked(err error) bool {
 	if err == nil {
 		return false
@@ -110,9 +104,6 @@ func (m *Manager) InitTable() error {
 		return err
 	}
 	if err := m.ensureColumn("task_item", "updated_time", "DATETIME"); err != nil {
-		return err
-	}
-	if err := m.migrateTaskItemTable(); err != nil {
 		return err
 	}
 	_, err := m.db.Exec(`
@@ -306,66 +297,53 @@ ON CONFLICT(task_id, filename) DO UPDATE SET
 	return tx.Commit()
 }
 
-func (m *Manager) ClaimPendingTaskItems(taskID string, limit int) ([]TaskItem, error) {
-	if limit <= 0 {
-		limit = 1
+func (m *Manager) ListPendingTaskItems(taskID string) ([]TaskItem, error) {
+	rows, err := m.db.Query(`
+SELECT filename, COALESCE(aria2_gid, ''), url, status, COALESCE(item_type, '')
+FROM task_item
+WHERE task_id = ? AND status = 'pending'
+ORDER BY id
+`, taskID)
+	if err != nil {
+		return nil, err
 	}
+	defer rows.Close()
 
+	var out []TaskItem
+	for rows.Next() {
+		var item TaskItem
+		if err := rows.Scan(&item.Filename, &item.Aria2GID, &item.URL, &item.Status, &item.ItemType); err != nil {
+			return nil, err
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+func (m *Manager) MarkTaskItemSubmitting(taskID, filename string) (bool, error) {
 	const maxAttempts = 8
-	query := `
-WITH picked AS (
-	SELECT id
-	FROM task_item
-	WHERE task_id = ? AND status = 'pending'
-	ORDER BY id
-	LIMIT ?
-)
-UPDATE task_item
-SET status = ?, updated_time = datetime('now')
-WHERE id IN (SELECT id FROM picked) AND status = 'pending'
-RETURNING filename, COALESCE(aria2_gid, ''), url, status, COALESCE(item_type, '')
-`
 	var lastErr error
 	for attempt := 0; attempt < maxAttempts; attempt++ {
-		rows, err := m.db.Query(query, taskID, limit, taskItemStatusSubmitting)
+		res, err := m.db.Exec(`
+UPDATE task_item
+SET status = ?, updated_time = datetime('now')
+WHERE task_id = ? AND filename = ? AND status = ?
+`, taskItemStatusSubmitting, taskID, filename, taskItemStatusPending)
 		if err != nil {
 			lastErr = err
 			if !isSQLiteBusyOrLocked(err) {
-				return nil, err
+				return false, err
 			}
 			sleepForBusyRetry(attempt)
 			continue
 		}
-
-		var out []TaskItem
-		for rows.Next() {
-			var item TaskItem
-			if err := rows.Scan(&item.Filename, &item.Aria2GID, &item.URL, &item.Status, &item.ItemType); err != nil {
-				rows.Close()
-				return nil, err
-			}
-			out = append(out, item)
+		affected, err := res.RowsAffected()
+		if err != nil {
+			return false, err
 		}
-		if err := rows.Err(); err != nil {
-			rows.Close()
-			lastErr = err
-			if !isSQLiteBusyOrLocked(err) {
-				return nil, err
-			}
-			sleepForBusyRetry(attempt)
-			continue
-		}
-		if err := rows.Close(); err != nil {
-			lastErr = err
-			if !isSQLiteBusyOrLocked(err) {
-				return nil, err
-			}
-			sleepForBusyRetry(attempt)
-			continue
-		}
-		return out, nil
+		return affected > 0, nil
 	}
-	return nil, fmt.Errorf("claim pending task items busy after %d attempts: %w", maxAttempts, lastErr)
+	return false, fmt.Errorf("mark task item submitting busy after %d attempts: %w", maxAttempts, lastErr)
 }
 
 func (m *Manager) BindTaskItemToAria2(taskID, filename, gid string) error {
@@ -398,6 +376,25 @@ SET aria2_gid = NULL,
 WHERE task_id = ? AND filename = ? AND status = ?
 `, taskItemStatusFailed, errMsg, taskID, filename, taskItemStatusSubmitting)
 	return err
+}
+
+func (m *Manager) ResetFailedTaskItemsToPending(taskID string) (int, error) {
+	res, err := m.db.Exec(`
+UPDATE task_item
+SET status = ?,
+	aria2_gid = NULL,
+	last_error = '',
+	updated_time = datetime('now')
+WHERE task_id = ? AND status = ?
+`, taskItemStatusPending, taskID, taskItemStatusFailed)
+	if err != nil {
+		return 0, err
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	return int(affected), nil
 }
 
 func (m *Manager) RecoverSubmittingTaskItems() error {
@@ -678,117 +675,6 @@ func (m *Manager) ensureColumn(tableName, columnName, definition string) error {
 
 	_, err = m.db.Exec(fmt.Sprintf(`ALTER TABLE %s ADD COLUMN %s %s`, tableName, columnName, definition))
 	return err
-}
-
-func (m *Manager) tableColumns(tableName string) (map[string]tableColumnInfo, error) {
-	rows, err := m.db.Query(fmt.Sprintf(`SELECT name, "notnull", dflt_value FROM pragma_table_info('%s')`, tableName))
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	columns := make(map[string]tableColumnInfo)
-	for rows.Next() {
-		var info tableColumnInfo
-		var notNull int
-		if err := rows.Scan(&info.Name, &notNull, &info.DefaultValue); err != nil {
-			return nil, err
-		}
-		info.NotNull = notNull != 0
-		columns[info.Name] = info
-	}
-	return columns, nil
-}
-
-func (m *Manager) migrateTaskItemTable() error {
-	columns, err := m.tableColumns("task_item")
-	if err != nil {
-		return err
-	}
-	aria2GID, ok := columns["aria2_gid"]
-	if !ok || !aria2GID.NotNull {
-		return nil
-	}
-
-	tx, err := m.db.Begin()
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-
-	if _, err := tx.Exec(`
-CREATE TABLE task_item_new (
-	id INTEGER PRIMARY KEY AUTOINCREMENT,
-	task_id TEXT NOT NULL,
-	filename TEXT NOT NULL,
-	aria2_gid TEXT,
-	url TEXT NOT NULL,
-	status TEXT NOT NULL DEFAULT 'pending',
-	completed_time DATETIME,
-	created_time DATETIME,
-	item_type TEXT NOT NULL DEFAULT '',
-	last_error TEXT NOT NULL DEFAULT '',
-	retry_count INTEGER NOT NULL DEFAULT 0,
-	updated_time DATETIME,
-	UNIQUE(task_id, filename)
-)
-`); err != nil {
-		return err
-	}
-
-	itemTypeExpr := `''`
-	if _, ok := columns["item_type"]; ok {
-		itemTypeExpr = `COALESCE(item_type, '')`
-	}
-	lastErrorExpr := `''`
-	if _, ok := columns["last_error"]; ok {
-		lastErrorExpr = `COALESCE(last_error, '')`
-	}
-	retryCountExpr := `0`
-	if _, ok := columns["retry_count"]; ok {
-		retryCountExpr = `COALESCE(retry_count, 0)`
-	}
-	updatedTimeExpr := `created_time`
-	if _, ok := columns["updated_time"]; ok {
-		updatedTimeExpr = `updated_time`
-	}
-
-	copyQuery := fmt.Sprintf(`
-INSERT INTO task_item_new (id, task_id, filename, aria2_gid, url, status, completed_time, created_time, item_type, last_error, retry_count, updated_time)
-SELECT
-	id,
-	task_id,
-	filename,
-	NULLIF(aria2_gid, ''),
-	url,
-	CASE WHEN COALESCE(status, '') = '' THEN '%s' ELSE status END,
-	completed_time,
-	created_time,
-	%s,
-	%s,
-	%s,
-	%s
-FROM task_item
-`, taskItemStatusQueued, itemTypeExpr, lastErrorExpr, retryCountExpr, updatedTimeExpr)
-	if _, err := tx.Exec(copyQuery); err != nil {
-		return err
-	}
-
-	if _, err := tx.Exec(`DROP TABLE task_item`); err != nil {
-		return err
-	}
-	if _, err := tx.Exec(`ALTER TABLE task_item_new RENAME TO task_item`); err != nil {
-		return err
-	}
-	if _, err := tx.Exec(`
-CREATE INDEX IF NOT EXISTS idx_task_item_task_id ON task_item(task_id);
-CREATE INDEX IF NOT EXISTS idx_task_item_gid ON task_item(aria2_gid);
-CREATE INDEX IF NOT EXISTS idx_task_item_task_status ON task_item(task_id, status);
-`); err != nil {
-		return err
-	}
-
-	return tx.Commit()
 }
 
 func emptyStringToNullString(value string) interface{} {

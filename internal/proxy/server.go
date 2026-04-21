@@ -1,6 +1,8 @@
 package proxy
 
 import (
+	"database/sql"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -61,6 +63,7 @@ func (s *Server) Start() error {
 		s.taskManager.HandleAdd(w, r, s.startDownloadFromURL)
 	})
 	mux.HandleFunc("POST /api/tasks/sync", s.taskManager.HandleSyncProgress)
+	mux.HandleFunc("POST /api/tasks/{id}/sync", s.handleSyncTask)
 	mux.HandleFunc("DELETE /api/tasks/{id}", s.taskManager.HandleDelete)
 	mux.HandleFunc("POST /api/tasks/{id}/stop", s.taskManager.HandleStop)
 
@@ -380,58 +383,120 @@ func (s *Server) handleKey(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) triggerDownloads(taskID string, items []playlist.DownloadItem) {
+	if len(items) > 0 {
+		if err := s.taskManager.CreateTaskItemsPlaceholders(taskID, items); err != nil {
+			log.Printf("triggerDownloads: CreateTaskItemsPlaceholders failed task=%s: %v", taskID, err)
+			return
+		}
+	}
+
+	s.dispatchPendingTaskItems(taskID)
+}
+
+func (s *Server) dispatchPendingTaskItems(taskID string) {
 	dir := cache.GetTaskDir(taskID)
 	headers := config.GlobalConfig.Headers
-	if len(items) == 0 {
-		return
-	}
-	if err := s.taskManager.CreateTaskItemsPlaceholders(taskID, items); err != nil {
-		log.Printf("triggerDownloads: CreateTaskItemsPlaceholders failed task=%s: %v", taskID, err)
-		return
-	}
 
-	claimed, err := s.taskManager.ClaimPendingTaskItems(taskID, len(items))
+	pending, err := s.taskManager.ListPendingTaskItems(taskID)
 	if err != nil {
-		log.Printf("triggerDownloads: ClaimPendingTaskItems failed task=%s: %v", taskID, err)
+		log.Printf("dispatchPendingTaskItems: ListPendingTaskItems failed task=%s: %v", taskID, err)
 		return
 	}
 
-	for _, item := range claimed {
+	for _, item := range pending {
+		marked, err := s.taskManager.MarkTaskItemSubmitting(taskID, item.Filename)
+		if err != nil {
+			log.Printf("dispatchPendingTaskItems: MarkTaskItemSubmitting failed task=%s file=%s: %v", taskID, item.Filename, err)
+			continue
+		}
+		if !marked {
+			continue
+		}
+
 		if cache.FileExists(taskID, item.Filename) {
 			if !cache.FileExists(taskID, item.Filename+".aria2") {
 				updated, err := s.taskManager.MarkTaskItemCompletedByFilename(taskID, item.Filename)
 				if err != nil {
-					log.Printf("triggerDownloads: MarkTaskItemCompletedByFilename failed task=%s file=%s: %v", taskID, item.Filename, err)
+					log.Printf("dispatchPendingTaskItems: MarkTaskItemCompletedByFilename failed task=%s file=%s: %v", taskID, item.Filename, err)
 				} else if updated {
-					log.Printf("triggerDownloads: marked existing file as completed task=%s file=%s", taskID, item.Filename)
+					log.Printf("dispatchPendingTaskItems: marked existing file as completed task=%s file=%s", taskID, item.Filename)
 				}
 				continue
 			}
 			if err := s.taskManager.MarkTaskItemSubmitFailed(taskID, item.Filename, "local partial file exists"); err != nil {
-				log.Printf("triggerDownloads: MarkTaskItemSubmitFailed partial file failed task=%s file=%s: %v", taskID, item.Filename, err)
+				log.Printf("dispatchPendingTaskItems: MarkTaskItemSubmitFailed partial file failed task=%s file=%s: %v", taskID, item.Filename, err)
 			}
 			continue
 		}
 
 		actualGID, err := s.aria2.AddUri(item.URL, dir, item.Filename, headers, "")
 		if err != nil {
-			log.Printf("triggerDownloads: aria2.addUri failed task=%s file=%s: %v", taskID, item.Filename, err)
+			log.Printf("dispatchPendingTaskItems: aria2.addUri failed task=%s file=%s: %v", taskID, item.Filename, err)
 			if markErr := s.taskManager.MarkTaskItemSubmitFailed(taskID, item.Filename, err.Error()); markErr != nil {
-				log.Printf("triggerDownloads: MarkTaskItemSubmitFailed failed task=%s file=%s: %v", taskID, item.Filename, markErr)
+				log.Printf("dispatchPendingTaskItems: MarkTaskItemSubmitFailed failed task=%s file=%s: %v", taskID, item.Filename, markErr)
 			}
 			continue
 		}
 
 		if err := s.taskManager.BindTaskItemToAria2(taskID, item.Filename, actualGID); err != nil {
-			log.Printf("triggerDownloads: BindTaskItemToAria2 failed task=%s file=%s gid=%s: %v", taskID, item.Filename, actualGID, err)
+			log.Printf("dispatchPendingTaskItems: BindTaskItemToAria2 failed task=%s file=%s gid=%s: %v", taskID, item.Filename, actualGID, err)
 			if rmErr := s.aria2.ForceRemove(actualGID); rmErr != nil {
-				log.Printf("triggerDownloads: ForceRemove orphan gid=%s after bind error: %v", actualGID, rmErr)
+				log.Printf("dispatchPendingTaskItems: ForceRemove orphan gid=%s after bind error: %v", actualGID, rmErr)
 			}
 			if markErr := s.taskManager.MarkTaskItemSubmitFailed(taskID, item.Filename, err.Error()); markErr != nil {
-				log.Printf("triggerDownloads: MarkTaskItemSubmitFailed after bind error failed task=%s file=%s: %v", taskID, item.Filename, markErr)
+				log.Printf("dispatchPendingTaskItems: MarkTaskItemSubmitFailed after bind error failed task=%s file=%s: %v", taskID, item.Filename, markErr)
 			}
 		}
 	}
+}
+
+func (s *Server) handleSyncTask(w http.ResponseWriter, r *http.Request) {
+	taskID := r.PathValue("id")
+	if taskID == "" {
+		http.Error(w, "Invalid ID", http.StatusBadRequest)
+		return
+	}
+
+	meta, err := s.taskManager.GetTask(taskID)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			http.Error(w, "Task not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if meta.Status != "stopped" {
+		http.Error(w, "Only stopped tasks can be resumed", http.StatusConflict)
+		return
+	}
+
+	updated, err := s.taskManager.SyncTaskProgressForTask(taskID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	reset, err := s.taskManager.ResetFailedTaskItemsToPending(taskID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	if err := s.taskManager.UpdateTaskStatus(taskID, "downloading"); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	s.dispatchPendingTaskItems(taskID)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"updated":      updated,
+		"failed_reset": reset,
+		"resumed":      true,
+		"task_id":      taskID,
+	})
 }
 
 // startAutoCleanup starts a goroutine that runs cleanup at midnight every day

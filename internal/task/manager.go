@@ -577,6 +577,47 @@ func (m *Manager) SyncTaskProgress() (int, error) {
 	return updatedCount, nil
 }
 
+func (m *Manager) SyncTaskProgressForTask(taskID string) (int, error) {
+	meta, err := m.GetTask(taskID)
+	if err != nil {
+		return 0, err
+	}
+
+	items, err := m.GetIncompleteTaskItems(meta.ID)
+	if err != nil {
+		return 0, fmt.Errorf("failed to list items for task=%s: %w", meta.ID, err)
+	}
+
+	updatedCount := 0
+	for _, item := range items {
+		if !cache.FileExists(meta.ID, item.Filename) {
+			continue
+		}
+		if cache.FileExists(meta.ID, item.Filename+".aria2") {
+			continue
+		}
+		if item.Aria2GID == "" {
+			updated, err := m.MarkTaskItemCompletedByFilename(meta.ID, item.Filename)
+			if err != nil {
+				return updatedCount, fmt.Errorf("failed to sync task=%s file=%s: %w", meta.ID, item.Filename, err)
+			}
+			if updated {
+				updatedCount++
+			}
+			continue
+		}
+		_, updated, err := m.MarkTaskItemCompletedByGID(item.Aria2GID)
+		if err != nil {
+			return updatedCount, fmt.Errorf("failed to sync task=%s gid=%s: %w", meta.ID, item.Aria2GID, err)
+		}
+		if updated {
+			updatedCount++
+		}
+	}
+
+	return updatedCount, nil
+}
+
 func (m *Manager) HandleSyncProgress(w http.ResponseWriter, r *http.Request) {
 	updated, err := m.SyncTaskProgress()
 	if err != nil {
