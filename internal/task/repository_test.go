@@ -2,6 +2,7 @@ package task
 
 import (
 	"database/sql"
+	"errors"
 	playlist "hls-accelerator/internal/m3u8"
 	"testing"
 	"time"
@@ -117,6 +118,21 @@ func TestTryCreateTaskUsesUniqueIndexAsArbitration(t *testing.T) {
 	}
 	if created {
 		t.Fatal("expected duplicate TryCreateTask to lose arbitration")
+	}
+}
+
+func TestSQLiteErrorMatchersAcceptCommonDriverMessages(t *testing.T) {
+	if !isSQLiteBusyOrLocked(errors.New("database table is locked: task_item")) {
+		t.Fatal("expected table-locked message to be retriable")
+	}
+	if !isSQLiteBusyOrLocked(errors.New("SQLITE_BUSY: database is busy")) {
+		t.Fatal("expected SQLITE_BUSY message to be retriable")
+	}
+	if !isSQLiteUniqueConstraintError(errors.New("constraint failed: UNIQUE constraint failed: tasks.id")) {
+		t.Fatal("expected wrapped unique-constraint message to be recognized")
+	}
+	if !isSQLiteUniqueConstraintError(errors.New("sql constraint violation")) {
+		t.Fatal("expected sql constraint message to be recognized")
 	}
 }
 
@@ -238,6 +254,44 @@ func TestMarkTaskItemCompletedByGIDPreservesStoppingStatus(t *testing.T) {
 	}
 	if taskAfter.Status != "stopping" {
 		t.Fatalf("status = %q, want stopping", taskAfter.Status)
+	}
+}
+
+func TestCreateTaskItemsPlaceholdersPrefersLastDuplicateEntry(t *testing.T) {
+	m := newTestManager(t)
+	meta := TaskMetadata{
+		ID:                 "task-duplicate-items",
+		Name:               "duplicate-items",
+		OriginalURL:        "https://example.com/dupe.m3u8",
+		TotalSegments:      1,
+		DownloadedSegments: 0,
+		CreatedTime:        time.Now(),
+		Status:             "downloading",
+	}
+	if err := m.CreateTask(meta); err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+
+	items := []playlist.DownloadItem{
+		{Filename: "seg-1.ts", URL: "https://example.com/old.ts?token=old", Type: "ts"},
+		{Filename: "seg-1.ts", URL: "https://example.com/new.ts?token=new", Type: "segment"},
+	}
+	if err := m.CreateTaskItemsPlaceholders(meta.ID, items); err != nil {
+		t.Fatalf("CreateTaskItemsPlaceholders: %v", err)
+	}
+
+	taskItems, err := m.GetTaskItems(meta.ID)
+	if err != nil {
+		t.Fatalf("GetTaskItems: %v", err)
+	}
+	if len(taskItems) != 1 {
+		t.Fatalf("task item count = %d, want 1", len(taskItems))
+	}
+	if taskItems[0].URL != "https://example.com/new.ts?token=new" {
+		t.Fatalf("url = %q, want last duplicate URL", taskItems[0].URL)
+	}
+	if taskItems[0].ItemType != "segment" {
+		t.Fatalf("item type = %q, want last duplicate type", taskItems[0].ItemType)
 	}
 }
 

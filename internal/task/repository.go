@@ -22,6 +22,7 @@ func isSQLiteBusyOrLocked(err error) bool {
 	}
 	msg := strings.ToLower(err.Error())
 	return strings.Contains(msg, "database is locked") ||
+		strings.Contains(msg, "database table is locked") ||
 		strings.Contains(msg, "sqlite_busy") ||
 		strings.Contains(msg, "busy")
 }
@@ -163,6 +164,10 @@ func (m *Manager) UpdateTaskStatus(id, status string) error {
 	return err
 }
 
+// MarkTaskStopping transitions a downloading task to stopping.
+// Returns (current_status, changed, error).
+//   - changed=true means the caller initiated downloading→stopping.
+//   - changed=false with status "stopped"/"stopping" means another caller already handled it.
 func (m *Manager) MarkTaskStopping(id string) (string, bool, error) {
 	meta, err := m.GetTask(id)
 	if err != nil {
@@ -301,13 +306,19 @@ ON CONFLICT(task_id, filename) DO UPDATE SET
 	}
 	defer stmt.Close()
 
-	seen := make(map[string]struct{}, len(items))
+	// Keep the last entry for a filename so refreshed signed URLs or corrected
+	// item types still win before the final UPSERT.
+	lastByFilename := make(map[string]playlist.DownloadItem, len(items))
 	for _, item := range items {
-		key := item.Filename + "\x00" + item.URL + "\x00" + item.Type
-		if _, ok := seen[key]; ok {
+		lastByFilename[item.Filename] = item
+	}
+	for _, item := range items {
+		current, ok := lastByFilename[item.Filename]
+		if !ok {
 			continue
 		}
-		seen[key] = struct{}{}
+		delete(lastByFilename, item.Filename)
+		item = current
 		if _, err := stmt.Exec(taskID, item.Filename, item.URL, item.Type, taskItemStatusPending); err != nil {
 			return err
 		}
@@ -569,27 +580,7 @@ WHERE aria2_gid = ? AND status = 'queued'
 		return taskID, false, nil
 	}
 
-	shouldCountTowardsProgress := itemType != "key" && !strings.HasSuffix(strings.ToLower(filename), ".key")
-	if !shouldCountTowardsProgress {
-		if err := tx.Commit(); err != nil {
-			return "", false, err
-		}
-		return taskID, true, nil
-	}
-
-	_, err = tx.Exec(`
-		UPDATE tasks
-		SET downloaded_segments = CASE
-				WHEN downloaded_segments < total_segments THEN downloaded_segments + 1
-				ELSE downloaded_segments
-			END,
-			status = CASE
-				WHEN downloaded_segments + 1 >= total_segments AND status = 'downloading' THEN 'completed'
-				ELSE status
-			END
-		WHERE id = ?
-	`, taskID)
-	if err != nil {
+	if err := m.incrementTaskProgressInTx(tx, taskID, itemType, filename); err != nil {
 		return "", false, err
 	}
 
@@ -642,28 +633,37 @@ WHERE task_id = ? AND filename = ? AND status != 'completed'
 		return false, nil
 	}
 
-	shouldCountTowardsProgress := itemType != "key" && !strings.HasSuffix(strings.ToLower(filename), ".key")
-	if shouldCountTowardsProgress {
-		if _, err := tx.Exec(`
-			UPDATE tasks
-			SET downloaded_segments = CASE
-					WHEN downloaded_segments < total_segments THEN downloaded_segments + 1
-					ELSE downloaded_segments
-				END,
-				status = CASE
-					WHEN downloaded_segments + 1 >= total_segments AND status = 'downloading' THEN 'completed'
-					ELSE status
-				END
-			WHERE id = ?
-		`, taskID); err != nil {
-			return false, err
-		}
+	if err := m.incrementTaskProgressInTx(tx, taskID, itemType, filename); err != nil {
+		return false, err
 	}
 
 	if err := tx.Commit(); err != nil {
 		return false, err
 	}
 	return true, nil
+}
+
+// incrementTaskProgressInTx updates the task's downloaded_segments counter.
+// Keys and .key files do not count towards progress.
+// The task status transitions to 'completed' only when still 'downloading'.
+func (m *Manager) incrementTaskProgressInTx(tx *sql.Tx, taskID, itemType, filename string) error {
+	shouldCountTowardsProgress := itemType != "key" && !strings.HasSuffix(strings.ToLower(filename), ".key")
+	if !shouldCountTowardsProgress {
+		return nil
+	}
+	_, err := tx.Exec(`
+		UPDATE tasks
+		SET downloaded_segments = CASE
+				WHEN downloaded_segments < total_segments THEN downloaded_segments + 1
+				ELSE downloaded_segments
+			END,
+			status = CASE
+				WHEN downloaded_segments + 1 >= total_segments AND status = 'downloading' THEN 'completed'
+				ELSE status
+			END
+		WHERE id = ?
+	`, taskID)
+	return err
 }
 
 func (m *Manager) GetTasksByStatuses(statuses ...string) ([]TaskMetadata, error) {
@@ -728,7 +728,7 @@ func (m *Manager) ensureColumn(tableName, columnName, definition string) error {
 }
 
 func emptyStringToNullString(value string) interface{} {
-	if strings.TrimSpace(value) == "" {
+	if value == "" {
 		return nil
 	}
 	return value

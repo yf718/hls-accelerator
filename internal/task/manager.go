@@ -554,58 +554,33 @@ func (m *Manager) SyncTaskProgress() (int, error) {
 
 	updatedCount := 0
 	for _, meta := range tasks {
-		items, err := m.GetIncompleteTaskItems(meta.ID)
+		n, err := m.syncTaskItemsFromFileSet(meta.ID)
 		if err != nil {
-			return updatedCount, fmt.Errorf("failed to list items for task=%s: %w", meta.ID, err)
+			return updatedCount, err
 		}
-		fileSet, err := m.taskFileSet(meta.ID)
-		if err != nil {
-			return updatedCount, fmt.Errorf("failed to inspect files for task=%s: %w", meta.ID, err)
-		}
-
-		for _, item := range items {
-			if _, ok := fileSet[item.Filename]; !ok {
-				continue
-			}
-			if _, ok := fileSet[item.Filename+".aria2"]; ok {
-				continue
-			}
-			if item.Aria2GID == "" {
-				updated, err := m.MarkTaskItemCompletedByFilename(meta.ID, item.Filename)
-				if err != nil {
-					return updatedCount, fmt.Errorf("failed to sync task=%s file=%s: %w", meta.ID, item.Filename, err)
-				}
-				if updated {
-					updatedCount++
-				}
-				continue
-			}
-			_, updated, err := m.MarkTaskItemCompletedByGID(item.Aria2GID)
-			if err != nil {
-				return updatedCount, fmt.Errorf("failed to sync task=%s gid=%s: %w", meta.ID, item.Aria2GID, err)
-			}
-			if updated {
-				updatedCount++
-			}
-		}
+		updatedCount += n
 	}
 
 	return updatedCount, nil
 }
 
 func (m *Manager) SyncTaskProgressForTask(taskID string) (int, error) {
-	meta, err := m.GetTask(taskID)
-	if err != nil {
+	if _, err := m.GetTask(taskID); err != nil {
 		return 0, err
 	}
+	return m.syncTaskItemsFromFileSet(taskID)
+}
 
-	items, err := m.GetIncompleteTaskItems(meta.ID)
+// syncTaskItemsFromFileSet checks the filesystem for task items that are
+// already downloaded but not yet marked completed in the database.
+func (m *Manager) syncTaskItemsFromFileSet(taskID string) (int, error) {
+	items, err := m.GetIncompleteTaskItems(taskID)
 	if err != nil {
-		return 0, fmt.Errorf("failed to list items for task=%s: %w", meta.ID, err)
+		return 0, fmt.Errorf("failed to list items for task=%s: %w", taskID, err)
 	}
-	fileSet, err := m.taskFileSet(meta.ID)
+	fileSet, err := m.taskFileSet(taskID)
 	if err != nil {
-		return 0, fmt.Errorf("failed to inspect files for task=%s: %w", meta.ID, err)
+		return 0, fmt.Errorf("failed to inspect files for task=%s: %w", taskID, err)
 	}
 
 	updatedCount := 0
@@ -617,9 +592,9 @@ func (m *Manager) SyncTaskProgressForTask(taskID string) (int, error) {
 			continue
 		}
 		if item.Aria2GID == "" {
-			updated, err := m.MarkTaskItemCompletedByFilename(meta.ID, item.Filename)
+			updated, err := m.MarkTaskItemCompletedByFilename(taskID, item.Filename)
 			if err != nil {
-				return updatedCount, fmt.Errorf("failed to sync task=%s file=%s: %w", meta.ID, item.Filename, err)
+				return updatedCount, fmt.Errorf("failed to sync task=%s file=%s: %w", taskID, item.Filename, err)
 			}
 			if updated {
 				updatedCount++
@@ -628,7 +603,7 @@ func (m *Manager) SyncTaskProgressForTask(taskID string) (int, error) {
 		}
 		_, updated, err := m.MarkTaskItemCompletedByGID(item.Aria2GID)
 		if err != nil {
-			return updatedCount, fmt.Errorf("failed to sync task=%s gid=%s: %w", meta.ID, item.Aria2GID, err)
+			return updatedCount, fmt.Errorf("failed to sync task=%s gid=%s: %w", taskID, item.Aria2GID, err)
 		}
 		if updated {
 			updatedCount++

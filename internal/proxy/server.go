@@ -441,6 +441,9 @@ func (s *Server) finishDispatchPendingTaskItems(taskID string, token uint64) {
 	s.dispatchMu.Unlock()
 }
 
+// canDispatchTask checks that the task is still in a dispatchable state.
+// This performs a DB query and should only be called at critical checkpoints,
+// not on every loop iteration.
 func (s *Server) canDispatchTask(ctx context.Context, taskID string) bool {
 	select {
 	case <-ctx.Done():
@@ -457,6 +460,11 @@ func (s *Server) canDispatchTask(ctx context.Context, taskID string) bool {
 }
 
 func (s *Server) dispatchPendingTaskItems(ctx context.Context, taskID string) {
+	if s.aria2 == nil {
+		log.Printf("dispatchPendingTaskItems: aria2 client is nil, cannot dispatch task=%s", taskID)
+		return
+	}
+
 	dir := cache.GetTaskDir(taskID)
 	headers := config.GlobalConfig.Headers
 
@@ -467,8 +475,11 @@ func (s *Server) dispatchPendingTaskItems(ctx context.Context, taskID string) {
 	}
 
 	for _, item := range pending {
-		if !s.canDispatchTask(ctx, taskID) {
+		// Fast check: context cancellation only (no DB query)
+		select {
+		case <-ctx.Done():
 			return
+		default:
 		}
 
 		marked, err := s.taskManager.MarkTaskItemSubmitting(taskID, item.Filename)
@@ -479,6 +490,8 @@ func (s *Server) dispatchPendingTaskItems(ctx context.Context, taskID string) {
 		if !marked {
 			continue
 		}
+
+		// DB check after state transition — is the task still downloadable?
 		if !s.canDispatchTask(ctx, taskID) {
 			if err := s.taskManager.ResetTaskItemToPending(taskID, item.Filename); err != nil {
 				log.Printf("dispatchPendingTaskItems: ResetTaskItemToPending failed after cancel task=%s file=%s: %v", taskID, item.Filename, err)
@@ -513,6 +526,8 @@ func (s *Server) dispatchPendingTaskItems(ctx context.Context, taskID string) {
 			}
 			continue
 		}
+
+		// DB check after expensive aria2 call — re-verify task is still active
 		if !s.canDispatchTask(ctx, taskID) {
 			if rmErr := s.aria2.ForceRemove(actualGID); rmErr != nil {
 				log.Printf("dispatchPendingTaskItems: ForceRemove canceled gid=%s: %v", actualGID, rmErr)
@@ -536,9 +551,12 @@ func (s *Server) dispatchPendingTaskItems(ctx context.Context, taskID string) {
 }
 
 func cleanupResumeArtifacts(taskID, filename string) error {
+	// Delete the data file first so that if this fails partway through,
+	// the remaining .aria2 control file signals an incomplete download
+	// rather than a silently corrupted partial file.
 	paths := []string{
-		cache.GetFilePath(taskID, filename+".aria2"),
 		cache.GetFilePath(taskID, filename),
+		cache.GetFilePath(taskID, filename+".aria2"),
 	}
 	for _, path := range paths {
 		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
