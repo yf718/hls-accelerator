@@ -397,6 +397,25 @@ WHERE task_id = ? AND status = ?
 	return int(affected), nil
 }
 
+func (m *Manager) ResetQueuedTaskItemsToPending(taskID string) (int, error) {
+	res, err := m.db.Exec(`
+UPDATE task_item
+SET status = ?,
+	aria2_gid = NULL,
+	last_error = '',
+	updated_time = datetime('now')
+WHERE task_id = ? AND status IN (?, ?)
+`, taskItemStatusPending, taskID, taskItemStatusQueued, taskItemStatusSubmitting)
+	if err != nil {
+		return 0, err
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	return int(affected), nil
+}
+
 func (m *Manager) RecoverSubmittingTaskItems() error {
 	_, err := m.db.Exec(`
 UPDATE task_item

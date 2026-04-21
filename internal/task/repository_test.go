@@ -422,6 +422,137 @@ func TestResetFailedTaskItemsToPending(t *testing.T) {
 	}
 }
 
+func TestResetQueuedTaskItemsToPending(t *testing.T) {
+	m := newTestManager(t)
+	meta := TaskMetadata{
+		ID:                 "task-reset-queued",
+		Name:               "reset-queued",
+		OriginalURL:        "https://example.com/reset-queued.m3u8",
+		TotalSegments:      2,
+		DownloadedSegments: 0,
+		CreatedTime:        time.Now(),
+		Status:             "stopped",
+	}
+	if err := m.CreateTask(meta); err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	if err := m.CreateTaskItemsPlaceholders(meta.ID, []playlist.DownloadItem{
+		{Filename: "00001.ts", URL: "https://example.com/1.ts", Type: "ts"},
+		{Filename: "00002.ts", URL: "https://example.com/2.ts", Type: "ts"},
+	}); err != nil {
+		t.Fatalf("CreateTaskItemsPlaceholders: %v", err)
+	}
+
+	marked, err := m.MarkTaskItemSubmitting(meta.ID, "00001.ts")
+	if err != nil {
+		t.Fatalf("MarkTaskItemSubmitting first: %v", err)
+	}
+	if !marked {
+		t.Fatal("expected first task item to enter submitting")
+	}
+	if err := m.BindTaskItemToAria2(meta.ID, "00001.ts", "gid-1"); err != nil {
+		t.Fatalf("BindTaskItemToAria2: %v", err)
+	}
+
+	marked, err = m.MarkTaskItemSubmitting(meta.ID, "00002.ts")
+	if err != nil {
+		t.Fatalf("MarkTaskItemSubmitting second: %v", err)
+	}
+	if !marked {
+		t.Fatal("expected second task item to enter submitting")
+	}
+
+	reset, err := m.ResetQueuedTaskItemsToPending(meta.ID)
+	if err != nil {
+		t.Fatalf("ResetQueuedTaskItemsToPending: %v", err)
+	}
+	if reset != 2 {
+		t.Fatalf("reset = %d, want 2", reset)
+	}
+
+	items, err := m.GetTaskItems(meta.ID)
+	if err != nil {
+		t.Fatalf("GetTaskItems: %v", err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("len(items) = %d, want 2", len(items))
+	}
+	for _, item := range items {
+		if item.Status != taskItemStatusPending {
+			t.Fatalf("item %s status = %q, want %q", item.Filename, item.Status, taskItemStatusPending)
+		}
+		if item.Aria2GID != "" {
+			t.Fatalf("item %s gid = %q, want empty", item.Filename, item.Aria2GID)
+		}
+	}
+}
+
+func TestStopTaskResetsQueuedItemsToPending(t *testing.T) {
+	m := newTestManager(t)
+	meta := TaskMetadata{
+		ID:                 "task-stop-reset",
+		Name:               "stop-reset",
+		OriginalURL:        "https://example.com/stop-reset.m3u8",
+		TotalSegments:      2,
+		DownloadedSegments: 0,
+		CreatedTime:        time.Now(),
+		Status:             "downloading",
+	}
+	if err := m.CreateTask(meta); err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	if err := m.CreateTaskItemsPlaceholders(meta.ID, []playlist.DownloadItem{
+		{Filename: "00001.ts", URL: "https://example.com/1.ts", Type: "ts"},
+		{Filename: "00002.ts", URL: "https://example.com/2.ts", Type: "ts"},
+	}); err != nil {
+		t.Fatalf("CreateTaskItemsPlaceholders: %v", err)
+	}
+
+	marked, err := m.MarkTaskItemSubmitting(meta.ID, "00001.ts")
+	if err != nil {
+		t.Fatalf("MarkTaskItemSubmitting first: %v", err)
+	}
+	if !marked {
+		t.Fatal("expected first task item to enter submitting")
+	}
+	if err := m.BindTaskItemToAria2(meta.ID, "00001.ts", "gid-1"); err != nil {
+		t.Fatalf("BindTaskItemToAria2: %v", err)
+	}
+
+	marked, err = m.MarkTaskItemSubmitting(meta.ID, "00002.ts")
+	if err != nil {
+		t.Fatalf("MarkTaskItemSubmitting second: %v", err)
+	}
+	if !marked {
+		t.Fatal("expected second task item to enter submitting")
+	}
+
+	if err := m.StopTask(meta.ID); err != nil {
+		t.Fatalf("StopTask: %v", err)
+	}
+
+	stoppedMeta, err := m.GetTask(meta.ID)
+	if err != nil {
+		t.Fatalf("GetTask: %v", err)
+	}
+	if stoppedMeta.Status != "stopped" {
+		t.Fatalf("task status = %q, want stopped", stoppedMeta.Status)
+	}
+
+	items, err := m.GetTaskItems(meta.ID)
+	if err != nil {
+		t.Fatalf("GetTaskItems: %v", err)
+	}
+	for _, item := range items {
+		if item.Status != taskItemStatusPending {
+			t.Fatalf("item %s status = %q, want %q", item.Filename, item.Status, taskItemStatusPending)
+		}
+		if item.Aria2GID != "" {
+			t.Fatalf("item %s gid = %q, want empty", item.Filename, item.Aria2GID)
+		}
+	}
+}
+
 func TestGetTaskItemGIDsSkipsEmptyValues(t *testing.T) {
 	m := newTestManager(t)
 	meta := TaskMetadata{

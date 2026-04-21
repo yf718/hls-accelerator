@@ -98,6 +98,10 @@ func (m *Manager) StopTask(id string) error {
 		}
 	}
 
+	if _, err := m.ResetQueuedTaskItemsToPending(id); err != nil {
+		return fmt.Errorf("failed to reset queued task items: %w", err)
+	}
+
 	return m.UpdateTaskStatus(id, "stopped")
 }
 
@@ -546,12 +550,16 @@ func (m *Manager) SyncTaskProgress() (int, error) {
 		if err != nil {
 			return updatedCount, fmt.Errorf("failed to list items for task=%s: %w", meta.ID, err)
 		}
+		fileSet, err := m.taskFileSet(meta.ID)
+		if err != nil {
+			return updatedCount, fmt.Errorf("failed to inspect files for task=%s: %w", meta.ID, err)
+		}
 
 		for _, item := range items {
-			if !cache.FileExists(meta.ID, item.Filename) {
+			if _, ok := fileSet[item.Filename]; !ok {
 				continue
 			}
-			if cache.FileExists(meta.ID, item.Filename+".aria2") {
+			if _, ok := fileSet[item.Filename+".aria2"]; ok {
 				continue
 			}
 			if item.Aria2GID == "" {
@@ -587,13 +595,17 @@ func (m *Manager) SyncTaskProgressForTask(taskID string) (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("failed to list items for task=%s: %w", meta.ID, err)
 	}
+	fileSet, err := m.taskFileSet(meta.ID)
+	if err != nil {
+		return 0, fmt.Errorf("failed to inspect files for task=%s: %w", meta.ID, err)
+	}
 
 	updatedCount := 0
 	for _, item := range items {
-		if !cache.FileExists(meta.ID, item.Filename) {
+		if _, ok := fileSet[item.Filename]; !ok {
 			continue
 		}
-		if cache.FileExists(meta.ID, item.Filename+".aria2") {
+		if _, ok := fileSet[item.Filename+".aria2"]; ok {
 			continue
 		}
 		if item.Aria2GID == "" {
@@ -616,6 +628,25 @@ func (m *Manager) SyncTaskProgressForTask(taskID string) (int, error) {
 	}
 
 	return updatedCount, nil
+}
+
+func (m *Manager) taskFileSet(taskID string) (map[string]struct{}, error) {
+	entries, err := os.ReadDir(cache.GetTaskDir(taskID))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return map[string]struct{}{}, nil
+		}
+		return nil, err
+	}
+
+	fileSet := make(map[string]struct{}, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		fileSet[entry.Name()] = struct{}{}
+	}
+	return fileSet, nil
 }
 
 func (m *Manager) HandleSyncProgress(w http.ResponseWriter, r *http.Request) {

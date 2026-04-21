@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
@@ -423,10 +424,13 @@ func (s *Server) dispatchPendingTaskItems(taskID string) {
 				}
 				continue
 			}
-			if err := s.taskManager.MarkTaskItemSubmitFailed(taskID, item.Filename, "local partial file exists"); err != nil {
-				log.Printf("dispatchPendingTaskItems: MarkTaskItemSubmitFailed partial file failed task=%s file=%s: %v", taskID, item.Filename, err)
+			if err := cleanupResumeArtifacts(taskID, item.Filename); err != nil {
+				log.Printf("dispatchPendingTaskItems: cleanupResumeArtifacts failed task=%s file=%s: %v", taskID, item.Filename, err)
+				if markErr := s.taskManager.MarkTaskItemSubmitFailed(taskID, item.Filename, err.Error()); markErr != nil {
+					log.Printf("dispatchPendingTaskItems: MarkTaskItemSubmitFailed partial file failed task=%s file=%s: %v", taskID, item.Filename, markErr)
+				}
+				continue
 			}
-			continue
 		}
 
 		actualGID, err := s.aria2.AddUri(item.URL, dir, item.Filename, headers, "")
@@ -448,6 +452,19 @@ func (s *Server) dispatchPendingTaskItems(taskID string) {
 			}
 		}
 	}
+}
+
+func cleanupResumeArtifacts(taskID, filename string) error {
+	paths := []string{
+		cache.GetFilePath(taskID, filename+".aria2"),
+		cache.GetFilePath(taskID, filename),
+	}
+	for _, path := range paths {
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("remove stale file %s: %w", path, err)
+		}
+	}
+	return nil
 }
 
 func (s *Server) handleSyncTask(w http.ResponseWriter, r *http.Request) {
@@ -483,20 +500,27 @@ func (s *Server) handleSyncTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	requeued, err := s.taskManager.ResetQueuedTaskItemsToPending(taskID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
 	if err := s.taskManager.UpdateTaskStatus(taskID, "downloading"); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	s.dispatchPendingTaskItems(taskID)
-
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"updated":      updated,
 		"failed_reset": reset,
+		"requeued":     requeued,
 		"resumed":      true,
 		"task_id":      taskID,
 	})
+
+	go s.dispatchPendingTaskItems(taskID)
 }
 
 // startAutoCleanup starts a goroutine that runs cleanup at midnight every day
