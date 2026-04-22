@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"hls-accelerator/internal/config"
 	"net/http"
+	"strconv"
 	"time"
 )
 
@@ -45,6 +46,27 @@ type rpcMethodCall struct {
 	methodName string
 	params     []interface{}
 	fallback   func() error
+}
+
+type AddURIRequest struct {
+	URI      string
+	Dir      string
+	Filename string
+	Headers  map[string]string
+}
+
+type StatusFile struct {
+	Path string `json:"path"`
+}
+
+type StatusDetail struct {
+	Gid             string       `json:"gid"`
+	Status          string       `json:"status"`
+	Dir             string       `json:"dir"`
+	CompletedLength string       `json:"completedLength"`
+	TotalLength     string       `json:"totalLength"`
+	ErrorMessage    string       `json:"errorMessage"`
+	Files           []StatusFile `json:"files"`
 }
 
 func (c *Aria2Client) Call(method string, params ...interface{}) (interface{}, error) {
@@ -117,6 +139,21 @@ func (c *Aria2Client) AddUri(uri string, dir string, filename string, headers ma
 	return gidStr, nil
 }
 
+func (s StatusDetail) FirstFilePath() string {
+	if len(s.Files) == 0 {
+		return ""
+	}
+	return s.Files[0].Path
+}
+
+func (s StatusDetail) CompletedLengthInt64() int64 {
+	if s.CompletedLength == "" {
+		return 0
+	}
+	value, _ := strconv.ParseInt(s.CompletedLength, 10, 64)
+	return value
+}
+
 type Aria2Status struct {
 	Gid string `json:"gid"`
 	Dir string `json:"dir"`
@@ -163,6 +200,20 @@ func (c *Aria2Client) ForceRemove(gid string) error {
 	return err
 }
 
+func (c *Aria2Client) multiCallRaw(calls []rpcMethodCall) (interface{}, error) {
+	if len(calls) == 0 {
+		return nil, nil
+	}
+	methods := make([]interface{}, 0, len(calls))
+	for _, call := range calls {
+		methods = append(methods, map[string]interface{}{
+			"methodName": call.methodName,
+			"params":     call.params,
+		})
+	}
+	return c.Call("system.multicall", methods)
+}
+
 func normalizeGIDs(gids []string) []string {
 	if len(gids) == 0 {
 		return nil
@@ -198,15 +249,7 @@ func (c *Aria2Client) invokeMultiCall(calls []rpcMethodCall) []int {
 		return nil
 	}
 
-	methods := make([]interface{}, 0, len(calls))
-	for _, call := range calls {
-		methods = append(methods, map[string]interface{}{
-			"methodName": call.methodName,
-			"params":     call.params,
-		})
-	}
-
-	result, err := c.Call("system.multicall", methods)
+	result, err := c.multiCallRaw(calls)
 	if err != nil {
 		return allIndexes(len(calls))
 	}
@@ -434,4 +477,166 @@ func (c *Aria2Client) RemoveDownloadResult(gid string) error {
 	_, err := c.Call("aria2.removeDownloadResult", gid)
 	// Ignore errors - the GID might not exist in results
 	return err
+}
+
+func (c *Aria2Client) BatchPause(gids []string) error {
+	return c.batchSimpleCall("aria2.pause", gids, c.Call)
+}
+
+func (c *Aria2Client) BatchUnpause(gids []string) error {
+	return c.batchSimpleCall("aria2.unpause", gids, c.Call)
+}
+
+func (c *Aria2Client) batchSimpleCall(method string, gids []string, fallback func(string, ...interface{}) (interface{}, error)) error {
+	if c == nil {
+		return nil
+	}
+	gids = normalizeGIDs(gids)
+	if len(gids) == 0 {
+		return nil
+	}
+	const batchSize = 64
+	for i := 0; i < len(gids); i += batchSize {
+		j := i + batchSize
+		if j > len(gids) {
+			j = len(gids)
+		}
+		chunk := gids[i:j]
+		calls := make([]rpcMethodCall, 0, len(chunk))
+		for _, gid := range chunk {
+			localGID := gid
+			calls = append(calls, rpcMethodCall{
+				methodName: method,
+				params:     c.innerRPCParams(localGID),
+				fallback: func() error {
+					_, err := fallback(method, localGID)
+					return err
+				},
+			})
+		}
+		for _, idx := range c.invokeMultiCall(calls) {
+			_ = calls[idx].fallback()
+		}
+	}
+	return nil
+}
+
+func (c *Aria2Client) BatchAddURIs(requests []AddURIRequest) ([]string, error) {
+	if c == nil || len(requests) == 0 {
+		return nil, nil
+	}
+
+	calls := make([]rpcMethodCall, 0, len(requests))
+	for _, request := range requests {
+		opts := map[string]interface{}{
+			"dir": request.Dir,
+			"out": request.Filename,
+		}
+		if len(request.Headers) > 0 {
+			headers := make([]string, 0, len(request.Headers))
+			for key, value := range request.Headers {
+				headers = append(headers, fmt.Sprintf("%s: %s", key, value))
+			}
+			opts["header"] = headers
+		}
+
+		req := request
+		calls = append(calls, rpcMethodCall{
+			methodName: "aria2.addUri",
+			params:     c.innerRPCParams([]string{req.URI}, opts),
+			fallback:   nil,
+		})
+	}
+
+	result, err := c.multiCallRaw(calls)
+	if err != nil {
+		return c.batchAddFallback(requests)
+	}
+
+	list, ok := result.([]interface{})
+	if !ok || len(list) != len(requests) {
+		return c.batchAddFallback(requests)
+	}
+
+	gids := make([]string, len(requests))
+	for idx, item := range list {
+		values, ok := item.([]interface{})
+		if !ok || len(values) == 0 {
+			return c.batchAddFallback(requests)
+		}
+		gid, ok := values[0].(string)
+		if !ok || gid == "" {
+			return c.batchAddFallback(requests)
+		}
+		gids[idx] = gid
+	}
+	return gids, nil
+}
+
+func (c *Aria2Client) batchAddFallback(requests []AddURIRequest) ([]string, error) {
+	gids := make([]string, 0, len(requests))
+	for _, request := range requests {
+		gid, err := c.AddUri(request.URI, request.Dir, request.Filename, request.Headers, "")
+		if err != nil {
+			return gids, err
+		}
+		gids = append(gids, gid)
+	}
+	return gids, nil
+}
+
+func (c *Aria2Client) BatchTellStatus(gids []string) (map[string]StatusDetail, error) {
+	if c == nil {
+		return map[string]StatusDetail{}, nil
+	}
+	gids = normalizeGIDs(gids)
+	if len(gids) == 0 {
+		return map[string]StatusDetail{}, nil
+	}
+
+	out := make(map[string]StatusDetail, len(gids))
+	const batchSize = 100
+	for i := 0; i < len(gids); i += batchSize {
+		j := i + batchSize
+		if j > len(gids) {
+			j = len(gids)
+		}
+		chunk := gids[i:j]
+		calls := make([]rpcMethodCall, 0, len(chunk))
+		for _, gid := range chunk {
+			calls = append(calls, rpcMethodCall{
+				methodName: "aria2.tellStatus",
+				params: c.innerRPCParams(gid, []string{
+					"gid", "status", "dir", "completedLength", "totalLength", "files", "errorMessage",
+				}),
+			})
+		}
+		result, err := c.multiCallRaw(calls)
+		if err != nil {
+			return nil, err
+		}
+		list, ok := result.([]interface{})
+		if !ok || len(list) != len(chunk) {
+			return nil, fmt.Errorf("invalid multicall tellStatus response")
+		}
+		for idx, raw := range list {
+			values, ok := raw.([]interface{})
+			if !ok || len(values) == 0 {
+				continue
+			}
+			payload, err := json.Marshal(values[0])
+			if err != nil {
+				return nil, err
+			}
+			var detail StatusDetail
+			if err := json.Unmarshal(payload, &detail); err != nil {
+				return nil, err
+			}
+			if detail.Gid == "" {
+				detail.Gid = chunk[idx]
+			}
+			out[detail.Gid] = detail
+		}
+	}
+	return out, nil
 }

@@ -138,19 +138,19 @@ func TestSQLiteErrorMatchersAcceptCommonDriverMessages(t *testing.T) {
 
 func TestEnqueueProgressNotificationDedupesInflightAndRecent(t *testing.T) {
 	m := newTestManager(t)
-	m.progressNotifyCh = make(chan string, 2)
+	m.progressNotifyCh = make(chan aria2NotificationEvent, 2)
 	m.progressInflight = make(map[string]struct{})
 	m.progressRecent = make(map[string]time.Time)
 
-	if !m.enqueueProgressNotification("gid-1") {
+	if !m.enqueueProgressNotification("aria2.onDownloadComplete", "gid-1") {
 		t.Fatal("expected first enqueue to succeed")
 	}
-	if m.enqueueProgressNotification("gid-1") {
+	if m.enqueueProgressNotification("aria2.onDownloadComplete", "gid-1") {
 		t.Fatal("expected inflight gid to be deduped")
 	}
 
 	m.finishProgressNotification("gid-1")
-	if m.enqueueProgressNotification("gid-1") {
+	if m.enqueueProgressNotification("aria2.onDownloadComplete", "gid-1") {
 		t.Fatal("expected recent gid to be deduped")
 	}
 
@@ -158,7 +158,7 @@ func TestEnqueueProgressNotificationDedupesInflightAndRecent(t *testing.T) {
 	m.progressRecent["gid-1"] = time.Now().Add(-time.Second)
 	m.progressDeduperMu.Unlock()
 
-	if !m.enqueueProgressNotification("gid-1") {
+	if !m.enqueueProgressNotification("aria2.onDownloadComplete", "gid-1") {
 		t.Fatal("expected expired recent gid to enqueue again")
 	}
 }
@@ -220,7 +220,7 @@ func TestMarkTaskItemCompletedByGIDDoesNotCountKeysTowardCompletion(t *testing.T
 	}
 }
 
-func TestMarkTaskItemCompletedByGIDPreservesStoppingStatus(t *testing.T) {
+func TestMarkTaskItemCompletedByGIDAggregatesToCompletedFromPaused(t *testing.T) {
 	m := newTestManager(t)
 
 	meta := TaskMetadata{
@@ -230,7 +230,7 @@ func TestMarkTaskItemCompletedByGIDPreservesStoppingStatus(t *testing.T) {
 		TotalSegments:      1,
 		DownloadedSegments: 0,
 		CreatedTime:        time.Now(),
-		Status:             "stopping",
+		Status:             "paused",
 	}
 	if err := m.CreateTask(meta); err != nil {
 		t.Fatalf("CreateTask: %v", err)
@@ -252,8 +252,8 @@ func TestMarkTaskItemCompletedByGIDPreservesStoppingStatus(t *testing.T) {
 	if taskAfter.DownloadedSegments != 1 {
 		t.Fatalf("downloaded = %d, want 1", taskAfter.DownloadedSegments)
 	}
-	if taskAfter.Status != "stopping" {
-		t.Fatalf("status = %q, want stopping", taskAfter.Status)
+	if taskAfter.Status != "completed" {
+		t.Fatalf("status = %q, want completed", taskAfter.Status)
 	}
 }
 
@@ -385,7 +385,7 @@ func TestCreateTaskItemsPlaceholdersMarkSubmittingAndBind(t *testing.T) {
 	}
 }
 
-func TestMarkTaskItemCompletedByFilenamePreservesStoppingStatus(t *testing.T) {
+func TestMarkTaskItemCompletedByFilenameAggregatesToCompletedFromPaused(t *testing.T) {
 	m := newTestManager(t)
 
 	meta := TaskMetadata{
@@ -395,7 +395,7 @@ func TestMarkTaskItemCompletedByFilenamePreservesStoppingStatus(t *testing.T) {
 		TotalSegments:      1,
 		DownloadedSegments: 0,
 		CreatedTime:        time.Now(),
-		Status:             "stopping",
+		Status:             "paused",
 	}
 	if err := m.CreateTask(meta); err != nil {
 		t.Fatalf("CreateTask: %v", err)
@@ -419,8 +419,8 @@ func TestMarkTaskItemCompletedByFilenamePreservesStoppingStatus(t *testing.T) {
 	if taskAfter.DownloadedSegments != 1 {
 		t.Fatalf("downloaded = %d, want 1", taskAfter.DownloadedSegments)
 	}
-	if taskAfter.Status != "stopping" {
-		t.Fatalf("status = %q, want stopping", taskAfter.Status)
+	if taskAfter.Status != "completed" {
+		t.Fatalf("status = %q, want completed", taskAfter.Status)
 	}
 }
 
@@ -665,8 +665,8 @@ func TestStopTaskResetsQueuedItemsToPending(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetTask: %v", err)
 	}
-	if stoppedMeta.Status != "stopped" {
-		t.Fatalf("task status = %q, want stopped", stoppedMeta.Status)
+	if stoppedMeta.Status != "paused" {
+		t.Fatalf("task status = %q, want paused", stoppedMeta.Status)
 	}
 
 	items, err := m.GetTaskItems(meta.ID)
@@ -674,11 +674,8 @@ func TestStopTaskResetsQueuedItemsToPending(t *testing.T) {
 		t.Fatalf("GetTaskItems: %v", err)
 	}
 	for _, item := range items {
-		if item.Status != taskItemStatusPending {
-			t.Fatalf("item %s status = %q, want %q", item.Filename, item.Status, taskItemStatusPending)
-		}
-		if item.Aria2GID != "" {
-			t.Fatalf("item %s gid = %q, want empty", item.Filename, item.Aria2GID)
+		if item.Status != taskItemStatusPaused {
+			t.Fatalf("item %s status = %q, want %q", item.Filename, item.Status, taskItemStatusPaused)
 		}
 	}
 }

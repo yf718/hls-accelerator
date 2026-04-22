@@ -2,7 +2,6 @@ package proxy
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -10,8 +9,8 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"sync"
 	"strings"
+	"sync"
 	"time"
 
 	"hls-accelerator/internal/cache"
@@ -41,17 +40,14 @@ type dispatchState struct {
 
 func NewServer() (*Server, error) {
 	aria2 := downloader.NewClient()
-
-	db, err := database.Init(config.GlobalConfig.CacheDir) // Store DB in cache dir
+	db, err := database.Init(config.GlobalConfig.CacheDir)
 	if err != nil {
 		return nil, fmt.Errorf("failed to init db: %v", err)
 	}
-
 	tm, err := task.NewManager(aria2, db)
 	if err != nil {
 		return nil, fmt.Errorf("failed to init task manager: %v", err)
 	}
-
 	return &Server{
 		addr:  fmt.Sprintf(":%d", config.GlobalConfig.ProxyPort),
 		aria2: aria2,
@@ -65,36 +61,33 @@ func NewServer() (*Server, error) {
 
 func (s *Server) Start() error {
 	mux := http.NewServeMux()
-
-	// Static Files (Web UI)
 	mux.Handle("/", http.FileServer(http.Dir("./web")))
 
-	// API Endpoints
-	mux.HandleFunc("GET /api/tasks", s.taskManager.HandleList)
-	mux.HandleFunc("POST /api/tasks", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET /api/v1/tasks", s.taskManager.HandleListV1)
+	mux.HandleFunc("POST /api/v1/tasks", func(w http.ResponseWriter, r *http.Request) {
 		s.taskManager.HandleAdd(w, r, s.startDownloadFromURL)
 	})
-	mux.HandleFunc("POST /api/tasks/sync", s.taskManager.HandleSyncProgress)
-	mux.HandleFunc("POST /api/tasks/{id}/sync", s.handleSyncTask)
-	mux.HandleFunc("DELETE /api/tasks/{id}", s.taskManager.HandleDelete)
-	mux.HandleFunc("POST /api/tasks/{id}/stop", s.handleStopTask)
+	mux.HandleFunc("GET /api/v1/tasks/{id}", s.taskManager.HandleGetTaskV1)
+	mux.HandleFunc("GET /api/v1/tasks/{id}/items", s.taskManager.HandleListTaskItemsV1)
+	mux.HandleFunc("GET /api/v1/tasks/{id}/items/{itemId}", s.taskManager.HandleGetTaskItemV1)
+	mux.HandleFunc("POST /api/v1/tasks/{id}/pause", s.handlePauseTask)
+	mux.HandleFunc("POST /api/v1/tasks/{id}/resume", s.handleResumeTask)
+	mux.HandleFunc("POST /api/v1/tasks/{id}/retry", s.handleRetryTask)
+	mux.HandleFunc("POST /api/v1/tasks/sync", s.taskManager.HandleSyncProgress)
+	mux.HandleFunc("DELETE /api/v1/tasks/{id}", s.handleDeleteTask)
 
-	// Proxy Endpoints
 	mux.HandleFunc("/proxy/m3u8/", s.handleM3U8)
 	mux.HandleFunc("/proxy/seg/", s.handleSegment)
 	mux.HandleFunc("/proxy/key/", s.handleKey)
 
-	// Start auto cleanup task if enabled
 	if config.GlobalConfig.AutoCleanupEnabled {
 		go s.startAutoCleanup()
-		log.Println("Auto cleanup enabled: will run daily at midnight")
 	}
 
 	log.Printf("Proxy starting at http://localhost%s", s.addr)
 	return http.ListenAndServe(s.addr, mux)
 }
 
-// startDownloadFromURL is used by the API to start a task without a player
 func (s *Server) startDownloadFromURL(addReq task.AddTaskRequest) error {
 	rawURL := addReq.URL
 	taskName := strings.TrimSpace(addReq.Name)
@@ -102,9 +95,9 @@ func (s *Server) startDownloadFromURL(addReq task.AddTaskRequest) error {
 		taskName = task.DeriveTaskName(rawURL)
 	}
 
-	httpReq, _ := http.NewRequest("GET", rawURL, nil)
-	for k, v := range config.GlobalConfig.Headers {
-		httpReq.Header.Set(k, v)
+	httpReq, _ := http.NewRequest(http.MethodGet, rawURL, nil)
+	for key, value := range config.GlobalConfig.Headers {
+		httpReq.Header.Set(key, value)
 	}
 
 	resp, err := s.client.Do(httpReq)
@@ -112,7 +105,6 @@ func (s *Server) startDownloadFromURL(addReq task.AddTaskRequest) error {
 		return err
 	}
 	defer resp.Body.Close()
-
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return fmt.Errorf("bad status code: %d", resp.StatusCode)
 	}
@@ -123,192 +115,146 @@ func (s *Server) startDownloadFromURL(addReq task.AddTaskRequest) error {
 		return err
 	}
 
-	// If Master, we just pick the first variant for now (Simplified)
-	// In a real tool we might want to ask the user or fetch all.
-	// For now, let's just error or handle if it's Variant.
-
 	if type_ == playlist.Master {
-		// Just log for now. A better implementation would find the best variant.
 		masterPl := pl.(*m3u8.MasterPlaylist)
-		if len(masterPl.Variants) > 0 {
-			// recursively call with the best variant
-			bestVar := masterPl.Variants[0]
-			// Find max bandwidth?
-			for _, v := range masterPl.Variants {
-				if v.Bandwidth > bestVar.Bandwidth {
-					bestVar = v
-				}
-			}
-			fullURL := playlist.ResolveURL(base, bestVar.URI)
-			return s.startDownloadFromURL(task.AddTaskRequest{
-				Name: taskName,
-				URL:  fullURL,
-			})
+		if len(masterPl.Variants) == 0 {
+			return fmt.Errorf("master playlist has no variants")
 		}
-		return fmt.Errorf("master playlist has no variants")
+		bestVar := masterPl.Variants[0]
+		for _, variant := range masterPl.Variants {
+			if variant.Bandwidth > bestVar.Bandwidth {
+				bestVar = variant
+			}
+		}
+		return s.startDownloadFromURL(task.AddTaskRequest{
+			Name: taskName,
+			URL:  playlist.ResolveURL(base, bestVar.URI),
+		})
 	}
 
-	if type_ == playlist.Variant {
-		taskID := cache.GetTaskID(rawURL)
-		// Save Metadata
-		mediaPl := pl.(*m3u8.MediaPlaylist)
-		// We use a dummy proxy base since we are just downloading
-		proxyBase := fmt.Sprintf("http://localhost:%d/proxy", config.GlobalConfig.ProxyPort)
-		updated, items, total := playlist.RewriteVariant(mediaPl, proxyBase, taskID, base)
-
-		// Create task directory
-		creatDirErr := cache.EnsureTaskDir(taskID)
-		if creatDirErr != nil {
-			return fmt.Errorf("failed to create task directory: %v", creatDirErr)
-		}
-
-		meta := task.TaskMetadata{
-			ID:             taskID,
-			Name:           taskName,
-			OriginalURL:    rawURL,
-			TotalSegments:  total,
-			CreatedTime:    time.Now(),
-			Status:         "downloading",
-			ProxiedContent: updated,
-		}
-		created, taskErr := s.taskManager.TryCreateTask(meta)
-		if taskErr != nil {
-			return taskErr
-		}
-		if !created {
-			_, status, err := s.taskManager.CheckTaskExists(taskID)
-			if err != nil {
-				return fmt.Errorf("task already exists")
-			}
-			return fmt.Errorf("task already exists: %s", status)
-		}
-
-		s.triggerDownloads(taskID, items)
+	if type_ != playlist.Variant {
+		return fmt.Errorf("unsupported playlist type")
 	}
+
+	taskID := cache.GetTaskID(rawURL)
+	mediaPl := pl.(*m3u8.MediaPlaylist)
+	proxyBase := fmt.Sprintf("http://localhost:%d/proxy", config.GlobalConfig.ProxyPort)
+	updated, items, total := playlist.RewriteVariant(mediaPl, proxyBase, taskID, base)
+
+	if err := cache.EnsureTaskDir(taskID); err != nil {
+		return err
+	}
+
+	meta := task.TaskMetadata{
+		ID:             taskID,
+		Name:           taskName,
+		OriginalURL:    rawURL,
+		TotalSegments:  total,
+		CreatedTime:    time.Now(),
+		UpdatedTime:    time.Now(),
+		Status:         task.TaskStatusParsing,
+		OutputDir:      cache.GetTaskDir(taskID),
+		ProxiedContent: updated,
+	}
+	created, err := s.taskManager.TryCreateTask(meta)
+	if err != nil {
+		return err
+	}
+	if !created {
+		_, status, err := s.taskManager.CheckTaskExists(taskID)
+		if err != nil {
+			return fmt.Errorf("task already exists")
+		}
+		return fmt.Errorf("task already exists: %s", status)
+	}
+
+	s.triggerDownloads(taskID, items)
 	return nil
 }
 
-// setM3U8Headers sets common headers for M3U8 responses
 func (s *Server) setM3U8Headers(w http.ResponseWriter) {
 	w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 }
 
-// writeM3U8Response writes M3U8 content to response with proper headers
 func (s *Server) writeM3U8Response(w http.ResponseWriter, content string) {
 	s.setM3U8Headers(w)
-	w.Write([]byte(content))
+	_, _ = w.Write([]byte(content))
 }
 
-// fetchUpstreamM3U8 fetches M3U8 content from upstream server
 func (s *Server) fetchUpstreamM3U8(originURL string) (*http.Response, error) {
-	req, err := http.NewRequest("GET", originURL, nil)
+	req, err := http.NewRequest(http.MethodGet, originURL, nil)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
+		return nil, err
 	}
-
-	// Set custom headers
-	for k, v := range config.GlobalConfig.Headers {
-		req.Header.Set(k, v)
+	for key, value := range config.GlobalConfig.Headers {
+		req.Header.Set(key, value)
 	}
-
 	resp, err := s.client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("failed to fetch upstream: %w", err)
+		return nil, err
 	}
-
-	// Check HTTP status code
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		resp.Body.Close()
 		return nil, fmt.Errorf("upstream returned bad status: %d", resp.StatusCode)
 	}
-
 	return resp, nil
 }
 
 func (s *Server) handleM3U8(w http.ResponseWriter, r *http.Request) {
-	// Path: /proxy/m3u8/{encoded_url}
 	encodedURL := strings.TrimPrefix(r.URL.Path, "/proxy/m3u8/")
 	if encodedURL == "" {
 		http.Error(w, "Missing URL parameter", http.StatusBadRequest)
 		return
 	}
-
 	originURL, err := url.QueryUnescape(encodedURL)
 	if err != nil {
 		http.Error(w, "Invalid URL encoding", http.StatusBadRequest)
 		return
 	}
-
-	// Validate origin URL
 	parsedURL, err := url.Parse(originURL)
-	if err != nil {
-		http.Error(w, "Invalid URL format", http.StatusBadRequest)
+	if err != nil || parsedURL.Scheme == "" || parsedURL.Host == "" {
+		http.Error(w, "Invalid URL", http.StatusBadRequest)
 		return
 	}
-	if parsedURL.Scheme == "" || parsedURL.Host == "" {
-		http.Error(w, "Invalid URL: missing scheme or host", http.StatusBadRequest)
-		return
-	}
-
-	// Calculate taskID once (used for both cache check and task management)
 	taskID := cache.GetTaskID(originURL)
-
-	// Optimization: Check DB first to avoid unnecessary upstream requests
 	if content, err := s.taskManager.GetTaskProxiedContent(taskID); err == nil && content != "" {
 		s.writeM3U8Response(w, content)
 		return
 	}
 
-	// Fetch from upstream
 	resp, err := s.fetchUpstreamM3U8(originURL)
 	if err != nil {
-		log.Printf("Failed to fetch M3U8 from %s: %v", originURL, err)
 		http.Error(w, "Failed to fetch upstream", http.StatusBadGateway)
 		return
 	}
 	defer resp.Body.Close()
 
-	// Parse M3U8 playlist
 	pl, playlistType, err := playlist.Parse(resp.Body)
 	if err != nil {
-		log.Printf("Failed to parse M3U8 from %s: %v", originURL, err)
 		http.Error(w, "Failed to parse m3u8", http.StatusBadGateway)
 		return
 	}
 
 	proxyBase := fmt.Sprintf("http://%s/proxy", r.Host)
-
-	// Handle based on playlist type
 	switch playlistType {
 	case playlist.Master:
-		s.handleMasterPlaylist(w, pl.(*m3u8.MasterPlaylist), proxyBase, parsedURL)
+		updated := playlist.RewriteMaster(pl.(*m3u8.MasterPlaylist), proxyBase, parsedURL)
+		s.writeM3U8Response(w, updated)
 	case playlist.Variant:
-		s.handleVariantPlaylist(w, r, pl.(*m3u8.MediaPlaylist), proxyBase, parsedURL, originURL, taskID)
+		s.handleVariantPlaylist(w, pl.(*m3u8.MediaPlaylist), proxyBase, parsedURL, originURL, taskID)
 	default:
 		http.Error(w, "Unknown playlist type", http.StatusBadGateway)
 	}
 }
 
-// handleMasterPlaylist processes and returns a master playlist
-func (s *Server) handleMasterPlaylist(w http.ResponseWriter, masterPl *m3u8.MasterPlaylist, proxyBase string, baseURL *url.URL) {
-	updated := playlist.RewriteMaster(masterPl, proxyBase, baseURL)
-	s.writeM3U8Response(w, updated)
-}
-
-// handleVariantPlaylist processes a variant playlist and manages download tasks
-func (s *Server) handleVariantPlaylist(w http.ResponseWriter, r *http.Request, mediaPl *m3u8.MediaPlaylist, proxyBase string, baseURL *url.URL, originURL, taskID string) {
-	// Ensure cache directory exists
+func (s *Server) handleVariantPlaylist(w http.ResponseWriter, mediaPl *m3u8.MediaPlaylist, proxyBase string, baseURL *url.URL, originURL, taskID string) {
 	if err := cache.EnsureTaskDir(taskID); err != nil {
-		log.Printf("Failed to create task directory for %s: %v", taskID, err)
 		http.Error(w, "Failed to initialize cache", http.StatusInternalServerError)
 		return
 	}
-
-	// Rewrite playlist and get download items
 	updated, items, total := playlist.RewriteVariant(mediaPl, proxyBase, taskID, baseURL)
 
-	// Let the unique index arbitrate ownership. Only the creator triggers downloads.
 	go func() {
 		meta := task.TaskMetadata{
 			ID:             taskID,
@@ -316,7 +262,9 @@ func (s *Server) handleVariantPlaylist(w http.ResponseWriter, r *http.Request, m
 			OriginalURL:    originURL,
 			TotalSegments:  total,
 			CreatedTime:    time.Now(),
-			Status:         "downloading",
+			UpdatedTime:    time.Now(),
+			Status:         task.TaskStatusParsing,
+			OutputDir:      cache.GetTaskDir(taskID),
 			ProxiedContent: updated,
 		}
 		created, err := s.taskManager.TryCreateTask(meta)
@@ -327,49 +275,35 @@ func (s *Server) handleVariantPlaylist(w http.ResponseWriter, r *http.Request, m
 		if !created {
 			return
 		}
-
 		s.triggerDownloads(taskID, items)
 	}()
 
-	// Return rewritten playlist immediately
 	s.writeM3U8Response(w, updated)
 }
 
-// Common handler for Segments and Keys
-// Path format: /proxy/{type}/{taskID}/{filename}/{encoded_url}
 func (s *Server) handleProxyFile(w http.ResponseWriter, r *http.Request, pathPrefix string) {
-	path := strings.TrimPrefix(r.URL.Path, pathPrefix)
-	parts := strings.SplitN(path, "/", 3)
+	pathValue := strings.TrimPrefix(r.URL.Path, pathPrefix)
+	parts := strings.SplitN(pathValue, "/", 3)
 	if len(parts) < 3 {
 		http.Error(w, "Invalid path structure", http.StatusBadRequest)
 		return
 	}
-	taskID := parts[0]
-	filename := parts[1]
-	encodedURL := parts[2]
-
+	taskID, filename, encodedURL := parts[0], parts[1], parts[2]
 	originURL, err := url.QueryUnescape(encodedURL)
 	if err != nil {
 		http.Error(w, "Invalid URL encoding", http.StatusBadRequest)
 		return
 	}
 
-	// Check Cache
-	if cache.FileExists(taskID, filename) {
-		// Check for .aria2 file implies incomplete
-		if !cache.FileExists(taskID, filename+".aria2") {
-			localPath := cache.GetFilePath(taskID, filename)
-			http.ServeFile(w, r, localPath)
-			return
-		}
+	if cache.FileExists(taskID, filename) && !cache.FileExists(taskID, filename+".aria2") {
+		http.ServeFile(w, r, cache.GetFilePath(taskID, filename))
+		return
 	}
 
-	// Fallback to Live Proxy
-	req, _ := http.NewRequest("GET", originURL, nil)
-	for k, v := range config.GlobalConfig.Headers {
-		req.Header.Set(k, v)
+	req, _ := http.NewRequest(http.MethodGet, originURL, nil)
+	for key, value := range config.GlobalConfig.Headers {
+		req.Header.Set(key, value)
 	}
-
 	resp, err := s.client.Do(req)
 	if err != nil {
 		http.Error(w, "Failed to fetch upstream", http.StatusBadGateway)
@@ -377,13 +311,12 @@ func (s *Server) handleProxyFile(w http.ResponseWriter, r *http.Request, pathPre
 	}
 	defer resp.Body.Close()
 
-	// Copy headers
-	for k, v := range resp.Header {
-		w.Header()[k] = v
+	for key, values := range resp.Header {
+		w.Header()[key] = values
 	}
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.WriteHeader(resp.StatusCode)
-	io.Copy(w, resp.Body)
+	_, _ = io.Copy(w, resp.Body)
 }
 
 func (s *Server) handleSegment(w http.ResponseWriter, r *http.Request) {
@@ -395,26 +328,24 @@ func (s *Server) handleKey(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) triggerDownloads(taskID string, items []playlist.DownloadItem) {
-	if len(items) > 0 {
-		if err := s.taskManager.CreateTaskItemsPlaceholders(taskID, items); err != nil {
-			log.Printf("triggerDownloads: CreateTaskItemsPlaceholders failed task=%s: %v", taskID, err)
-			return
-		}
+	if len(items) == 0 {
+		return
 	}
-
+	if err := s.taskManager.CreateTaskItemsPlaceholders(taskID, items); err != nil {
+		log.Printf("CreateTaskItemsPlaceholders failed task=%s: %v", taskID, err)
+		return
+	}
 	s.startDispatchPendingTaskItems(taskID)
 }
 
 func (s *Server) startDispatchPendingTaskItems(taskID string) {
 	s.cancelDispatchPendingTaskItems(taskID)
-
 	ctx, cancel := context.WithCancel(context.Background())
 	s.dispatchMu.Lock()
 	s.dispatchSeq++
 	token := s.dispatchSeq
 	s.dispatches[taskID] = dispatchState{token: token, cancel: cancel}
 	s.dispatchMu.Unlock()
-
 	go func() {
 		defer s.finishDispatchPendingTaskItems(taskID, token)
 		s.dispatchPendingTaskItems(ctx, taskID)
@@ -426,7 +357,6 @@ func (s *Server) cancelDispatchPendingTaskItems(taskID string) {
 	state, ok := s.dispatches[taskID]
 	delete(s.dispatches, taskID)
 	s.dispatchMu.Unlock()
-
 	if ok && state.cancel != nil {
 		state.cancel()
 	}
@@ -441,252 +371,193 @@ func (s *Server) finishDispatchPendingTaskItems(taskID string, token uint64) {
 	s.dispatchMu.Unlock()
 }
 
-// canDispatchTask checks that the task is still in a dispatchable state.
-// This performs a DB query and should only be called at critical checkpoints,
-// not on every loop iteration.
 func (s *Server) canDispatchTask(ctx context.Context, taskID string) bool {
 	select {
 	case <-ctx.Done():
 		return false
 	default:
 	}
-
 	meta, err := s.taskManager.GetTask(taskID)
 	if err != nil {
-		log.Printf("canDispatchTask: GetTask failed task=%s: %v", taskID, err)
 		return false
 	}
-	return meta.Status == "downloading"
+	return meta.Status == task.TaskStatusDownloading || meta.Status == task.TaskStatusParsing
+}
+
+func (s *Server) resetCanceledDispatchItem(taskID, filename string) {
+	meta, err := s.taskManager.GetTask(taskID)
+	if err != nil {
+		_ = s.taskManager.ResetTaskItemToPending(taskID, filename)
+		return
+	}
+	if meta.Status == task.TaskStatusPaused {
+		_ = s.taskManager.ResetTaskItemToPaused(taskID, filename)
+		return
+	}
+	_ = s.taskManager.ResetTaskItemToPending(taskID, filename)
 }
 
 func (s *Server) dispatchPendingTaskItems(ctx context.Context, taskID string) {
 	if s.aria2 == nil {
-		log.Printf("dispatchPendingTaskItems: aria2 client is nil, cannot dispatch task=%s", taskID)
 		return
 	}
-
 	dir := cache.GetTaskDir(taskID)
 	headers := config.GlobalConfig.Headers
 
 	pending, err := s.taskManager.ListPendingTaskItems(taskID)
 	if err != nil {
-		log.Printf("dispatchPendingTaskItems: ListPendingTaskItems failed task=%s: %v", taskID, err)
+		log.Printf("ListPendingTaskItems failed task=%s: %v", taskID, err)
 		return
 	}
 
-	for _, item := range pending {
-		// Fast check: context cancellation only (no DB query)
+	const batchSize = 50
+	for start := 0; start < len(pending); start += batchSize {
 		select {
 		case <-ctx.Done():
 			return
 		default:
 		}
 
-		marked, err := s.taskManager.MarkTaskItemSubmitting(taskID, item.Filename)
-		if err != nil {
-			log.Printf("dispatchPendingTaskItems: MarkTaskItemSubmitting failed task=%s file=%s: %v", taskID, item.Filename, err)
-			continue
+		end := start + batchSize
+		if end > len(pending) {
+			end = len(pending)
 		}
-		if !marked {
+
+		chunk := pending[start:end]
+		requests := make([]downloader.AddURIRequest, 0, len(chunk))
+		readyItems := make([]task.TaskItem, 0, len(chunk))
+
+		for _, item := range chunk {
+			marked, err := s.taskManager.MarkTaskItemSubmitting(taskID, item.Filename)
+			if err != nil || !marked {
+				continue
+			}
+			if !s.canDispatchTask(ctx, taskID) {
+				s.resetCanceledDispatchItem(taskID, item.Filename)
+				return
+			}
+			if cache.FileExists(taskID, item.Filename) {
+				if !cache.FileExists(taskID, item.Filename+".aria2") {
+					_, _ = s.taskManager.MarkTaskItemCompletedByFilename(taskID, item.Filename)
+					continue
+				}
+				if err := cleanupResumeArtifacts(taskID, item.Filename); err != nil {
+					_ = s.taskManager.MarkTaskItemSubmitFailed(taskID, item.Filename, err.Error())
+					continue
+				}
+			}
+			requests = append(requests, downloader.AddURIRequest{
+				URI:      item.URL,
+				Dir:      dir,
+				Filename: item.Filename,
+				Headers:  headers,
+			})
+			readyItems = append(readyItems, item)
+		}
+
+		if len(requests) == 0 {
 			continue
 		}
 
-		// DB check after state transition — is the task still downloadable?
+		gids, err := s.aria2.BatchAddURIs(requests)
+		if err != nil {
+			for _, item := range readyItems {
+				_ = s.taskManager.MarkTaskItemSubmitFailed(taskID, item.Filename, err.Error())
+			}
+			continue
+		}
 		if !s.canDispatchTask(ctx, taskID) {
-			if err := s.taskManager.ResetTaskItemToPending(taskID, item.Filename); err != nil {
-				log.Printf("dispatchPendingTaskItems: ResetTaskItemToPending failed after cancel task=%s file=%s: %v", taskID, item.Filename, err)
+			s.aria2.ForceRemoveMany(gids)
+			for _, item := range readyItems {
+				s.resetCanceledDispatchItem(taskID, item.Filename)
 			}
 			return
 		}
 
-		if cache.FileExists(taskID, item.Filename) {
-			if !cache.FileExists(taskID, item.Filename+".aria2") {
-				updated, err := s.taskManager.MarkTaskItemCompletedByFilename(taskID, item.Filename)
-				if err != nil {
-					log.Printf("dispatchPendingTaskItems: MarkTaskItemCompletedByFilename failed task=%s file=%s: %v", taskID, item.Filename, err)
-				} else if updated {
-					log.Printf("dispatchPendingTaskItems: marked existing file as completed task=%s file=%s", taskID, item.Filename)
-				}
+		for idx, item := range readyItems {
+			if idx >= len(gids) || gids[idx] == "" {
+				_ = s.taskManager.MarkTaskItemSubmitFailed(taskID, item.Filename, "missing gid from aria2")
 				continue
 			}
-			if err := cleanupResumeArtifacts(taskID, item.Filename); err != nil {
-				log.Printf("dispatchPendingTaskItems: cleanupResumeArtifacts failed task=%s file=%s: %v", taskID, item.Filename, err)
-				if markErr := s.taskManager.MarkTaskItemSubmitFailed(taskID, item.Filename, err.Error()); markErr != nil {
-					log.Printf("dispatchPendingTaskItems: MarkTaskItemSubmitFailed partial file failed task=%s file=%s: %v", taskID, item.Filename, markErr)
-				}
+			if err := s.taskManager.BindTaskItemToAria2(taskID, item.Filename, gids[idx]); err != nil {
+				_ = s.aria2.ForceRemove(gids[idx])
+				_ = s.taskManager.MarkTaskItemSubmitFailed(taskID, item.Filename, err.Error())
 				continue
 			}
-		}
-
-		actualGID, err := s.aria2.AddUri(item.URL, dir, item.Filename, headers, "")
-		if err != nil {
-			log.Printf("dispatchPendingTaskItems: aria2.addUri failed task=%s file=%s: %v", taskID, item.Filename, err)
-			if markErr := s.taskManager.MarkTaskItemSubmitFailed(taskID, item.Filename, err.Error()); markErr != nil {
-				log.Printf("dispatchPendingTaskItems: MarkTaskItemSubmitFailed failed task=%s file=%s: %v", taskID, item.Filename, markErr)
-			}
-			continue
-		}
-
-		// DB check after expensive aria2 call — re-verify task is still active
-		if !s.canDispatchTask(ctx, taskID) {
-			if rmErr := s.aria2.ForceRemove(actualGID); rmErr != nil {
-				log.Printf("dispatchPendingTaskItems: ForceRemove canceled gid=%s: %v", actualGID, rmErr)
-			}
-			if resetErr := s.taskManager.ResetTaskItemToPending(taskID, item.Filename); resetErr != nil {
-				log.Printf("dispatchPendingTaskItems: ResetTaskItemToPending failed after AddUri task=%s file=%s: %v", taskID, item.Filename, resetErr)
-			}
-			return
-		}
-
-		if err := s.taskManager.BindTaskItemToAria2(taskID, item.Filename, actualGID); err != nil {
-			log.Printf("dispatchPendingTaskItems: BindTaskItemToAria2 failed task=%s file=%s gid=%s: %v", taskID, item.Filename, actualGID, err)
-			if rmErr := s.aria2.ForceRemove(actualGID); rmErr != nil {
-				log.Printf("dispatchPendingTaskItems: ForceRemove orphan gid=%s after bind error: %v", actualGID, rmErr)
-			}
-			if markErr := s.taskManager.MarkTaskItemSubmitFailed(taskID, item.Filename, err.Error()); markErr != nil {
-				log.Printf("dispatchPendingTaskItems: MarkTaskItemSubmitFailed after bind error failed task=%s file=%s: %v", taskID, item.Filename, markErr)
-			}
+			s.pauseBoundItemIfTaskPaused(taskID, gids[idx])
 		}
 	}
 }
 
+func (s *Server) pauseBoundItemIfTaskPaused(taskID, gid string) {
+	meta, err := s.taskManager.GetTask(taskID)
+	if err != nil || meta.Status != task.TaskStatusPaused || gid == "" || s.aria2 == nil {
+		return
+	}
+	_ = s.aria2.BatchPause([]string{gid})
+	_, _, _ = s.taskManager.UpdateTaskItemStateByGID(gid, "paused", "", "", 0)
+}
+
 func cleanupResumeArtifacts(taskID, filename string) error {
-	// Delete the data file first so that if this fails partway through,
-	// the remaining .aria2 control file signals an incomplete download
-	// rather than a silently corrupted partial file.
 	paths := []string{
 		cache.GetFilePath(taskID, filename),
 		cache.GetFilePath(taskID, filename+".aria2"),
 	}
-	for _, path := range paths {
-		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-			return fmt.Errorf("remove stale file %s: %w", path, err)
+	for _, current := range paths {
+		if err := os.Remove(current); err != nil && !os.IsNotExist(err) {
+			return err
 		}
 	}
 	return nil
 }
 
-func (s *Server) handleSyncTask(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handlePauseTask(w http.ResponseWriter, r *http.Request) {
 	taskID := r.PathValue("id")
-	if taskID == "" {
-		http.Error(w, "Invalid ID", http.StatusBadRequest)
-		return
-	}
-
-	meta, err := s.taskManager.GetTask(taskID)
+	s.cancelDispatchPendingTaskItems(taskID)
+	paused, err := s.taskManager.PauseTask(taskID)
 	if err != nil {
-		if err == sql.ErrNoRows {
-			http.Error(w, "Task not found", http.StatusNotFound)
-			return
-		}
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	if meta.Status != "stopped" {
-		http.Error(w, "Only stopped tasks can be resumed", http.StatusConflict)
-		return
-	}
-
-	updated, err := s.taskManager.SyncTaskProgressForTask(taskID)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	reset, err := s.taskManager.ResetFailedTaskItemsToPending(taskID)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	requeued, err := s.taskManager.ResetQueuedTaskItemsToPending(taskID)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	if err := s.taskManager.UpdateTaskStatus(taskID, "downloading"); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"updated":      updated,
-		"failed_reset": reset,
-		"requeued":     requeued,
-		"resumed":      true,
-		"task_id":      taskID,
-	})
-
-	s.startDispatchPendingTaskItems(taskID)
-}
-
-func (s *Server) handleStopTask(w http.ResponseWriter, r *http.Request) {
-	taskID := r.PathValue("id")
-	if taskID == "" {
-		http.Error(w, "Invalid ID", http.StatusBadRequest)
-		return
-	}
-
-	status, changed, err := s.taskManager.MarkTaskStopping(taskID)
-	if err != nil {
-		if err == sql.ErrNoRows {
-			http.Error(w, "Task not found", http.StatusNotFound)
-			return
-		}
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
-
-	s.cancelDispatchPendingTaskItems(taskID)
-
-	if status == "stopped" {
-		w.WriteHeader(http.StatusOK)
-		return
-	}
-	if !changed && status == "stopping" {
-		w.WriteHeader(http.StatusAccepted)
-		return
-	}
-
 	go func() {
-		if err := s.taskManager.StopTask(taskID); err != nil {
-			log.Printf("handleStopTask: StopTask failed task=%s: %v", taskID, err)
+		if updated, err := s.taskManager.ReconcileTaskItems(taskID); err != nil {
+			log.Printf("pause reconcile failed task=%s: %v", taskID, err)
+		} else if updated > 0 {
+			log.Printf("pause reconcile updated %d items for task=%s", updated, taskID)
 		}
 	}()
-
-	w.WriteHeader(http.StatusAccepted)
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{"paused_items": paused})
 }
 
-// startAutoCleanup starts a goroutine that runs cleanup at midnight every day
+func (s *Server) handleResumeTask(w http.ResponseWriter, r *http.Request) {
+	s.taskManager.HandleResumeV1(w, r, s.startDispatchPendingTaskItems)
+}
+
+func (s *Server) handleRetryTask(w http.ResponseWriter, r *http.Request) {
+	s.taskManager.HandleRetryV1(w, r, s.startDispatchPendingTaskItems)
+}
+
+func (s *Server) handleDeleteTask(w http.ResponseWriter, r *http.Request) {
+	taskID := r.PathValue("id")
+	s.cancelDispatchPendingTaskItems(taskID)
+	s.taskManager.HandleDeleteV1(w, r)
+}
+
 func (s *Server) startAutoCleanup() {
-	// Calculate duration until next midnight
 	now := time.Now()
-	midnight := time.Date(now.Year(), now.Month(), now.Day()+1, 3, 0, 0, 0, now.Location())
-	durationUntilMidnight := midnight.Sub(now)
-
-	// Wait until midnight
-	time.Sleep(durationUntilMidnight)
-
-	// Run cleanup immediately at first midnight
+	next := time.Date(now.Year(), now.Month(), now.Day()+1, 3, 0, 0, 0, now.Location())
+	time.Sleep(next.Sub(now))
 	s.runCleanup()
-
-	// Then run cleanup every 24 hours
 	ticker := time.NewTicker(24 * time.Hour)
 	defer ticker.Stop()
-
 	for range ticker.C {
 		s.runCleanup()
 	}
 }
 
-// runCleanup executes the cleanup of completed tasks
 func (s *Server) runCleanup() {
-	log.Println("Starting auto cleanup of completed tasks...")
 	if err := s.taskManager.DeleteCompletedTasks(); err != nil {
 		log.Printf("Auto cleanup failed: %v", err)
-	} else {
-		log.Println("Auto cleanup completed successfully")
 	}
 }

@@ -18,6 +18,11 @@ func Init(dataDir string) (*sql.DB, error) {
 	if err != nil {
 		return nil, err
 	}
+	// SQLite 在当前这个高频小事务场景下，多连接写入非常容易触发 SQLITE_BUSY。
+	// 这里直接串行化 DB 连接，优先保证 task/task_item 状态一致性。
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+	db.SetConnMaxLifetime(0)
 	if err := db.Ping(); err != nil {
 		return nil, err
 	}

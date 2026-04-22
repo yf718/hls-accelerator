@@ -1,1103 +1,572 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
-
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>HLS Accelerator Manager</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HLS Download Console</title>
     <style>
         :root {
-            --bg-body: #0f1115;
-            --bg-card: #181b21;
-            --bg-card-hover: #1f232b;
-            --bg-card-deleting: rgba(59, 130, 246, 0.08);
-            --bg-card-failed: rgba(239, 68, 68, 0.08);
-            --primary: #3b82f6;
-            --primary-hover: #2563eb;
-            --text-main: #e2e8f0;
-            --text-muted: #94a3b8;
-            --border: #2d3748;
-            --success: #10b981;
-            --warning: #f59e0b;
-            --danger: #ef4444;
-            --glass: rgba(24, 27, 33, 0.7);
+            --bg: #f4efe6;
+            --ink: #1f2a2c;
+            --muted: #6a7475;
+            --line: rgba(31, 42, 44, 0.12);
+            --card: rgba(255, 251, 245, 0.88);
+            --primary: #0f766e;
+            --primary-soft: rgba(15, 118, 110, 0.12);
+            --warn: #b45309;
+            --danger: #b91c1c;
+            --ok: #15803d;
+            --shadow: 0 18px 48px rgba(45, 55, 72, 0.12);
         }
 
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-
+        * { box-sizing: border-box; }
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Microsoft YaHei', 'PingFang SC', 'Hiragino Sans GB', sans-serif;
-            background-color: var(--bg-body);
-            color: var(--text-main);
-            overflow-x: hidden;
-            -webkit-font-smoothing: antialiased;
+            margin: 0;
+            font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
+            color: var(--ink);
+            background:
+                radial-gradient(circle at top right, rgba(15, 118, 110, 0.14), transparent 34%),
+                radial-gradient(circle at left center, rgba(180, 83, 9, 0.12), transparent 28%),
+                linear-gradient(180deg, #f7f2ea 0%, #f2ece1 100%);
         }
 
-        /* Layout */
-        .container {
-            max-width: 800px;
+        .shell {
+            max-width: 1380px;
             margin: 0 auto;
-            padding: 20px;
-            padding-bottom: 80px;
-            /* Space for FAB */
+            padding: 28px 20px 40px;
         }
 
-        /* Header */
-        header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 30px;
-            padding: 10px 0;
-            border-bottom: 1px solid var(--border);
+        .hero {
+            display: grid;
+            grid-template-columns: 1.1fr 0.9fr;
+            gap: 18px;
+            margin-bottom: 18px;
         }
 
-        .header-actions {
-            display: flex;
-            align-items: center;
-            gap: 8px;
+        .hero-card, .panel, .task-card, .drawer-panel {
+            background: var(--card);
+            backdrop-filter: blur(14px);
+            border: 1px solid var(--line);
+            border-radius: 24px;
+            box-shadow: var(--shadow);
+        }
+
+        .hero-card {
+            padding: 28px;
+        }
+
+        .eyebrow {
+            display: inline-flex;
+            padding: 6px 12px;
+            border-radius: 999px;
+            background: rgba(255,255,255,0.65);
+            border: 1px solid var(--line);
+            font-size: 12px;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            color: var(--muted);
         }
 
         h1 {
-            font-size: 1.5rem;
-            font-weight: 700;
-            background: linear-gradient(90deg, #60a5fa, #a78bfa);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
+            margin: 14px 0 10px;
+            font-size: clamp(30px, 4vw, 46px);
+            line-height: 1.05;
         }
 
-        /* Stats Cards */
-        .stats-grid {
+        .hero-copy {
+            margin: 0;
+            color: var(--muted);
+            line-height: 1.7;
+        }
+
+        .stat-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-            gap: 15px;
-            margin-bottom: 30px;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 12px;
+            margin-top: 22px;
         }
 
-        .stat-card {
-            background: var(--bg-card);
-            padding: 20px;
-            border-radius: 12px;
-            border: 1px solid var(--border);
+        .stat {
+            padding: 16px;
+            border-radius: 18px;
+            background: rgba(255,255,255,0.6);
+            border: 1px solid var(--line);
         }
 
-        .stat-value {
-            font-size: 1.8rem;
-            font-weight: 600;
-            color: var(--text-main);
+        .stat-value { font-size: 28px; font-weight: 700; }
+        .stat-label { font-size: 13px; color: var(--muted); margin-top: 6px; }
+
+        .panel {
+            padding: 24px;
         }
 
-        .stat-label {
-            font-size: 0.85rem;
-            color: var(--text-muted);
-            margin-top: 5px;
+        .panel h2, .drawer-panel h2 {
+            margin: 0 0 16px;
+            font-size: 20px;
         }
 
-        /* Task List */
-        .task-list {
+        .form-grid {
+            display: grid;
+            gap: 14px;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 8px;
+            font-size: 13px;
+            color: var(--muted);
+        }
+
+        input, select {
+            width: 100%;
+            border: 1px solid var(--line);
+            border-radius: 16px;
+            padding: 13px 15px;
+            font-size: 14px;
+            background: rgba(255,255,255,0.82);
+            color: var(--ink);
+        }
+
+        .actions, .toolbar {
             display: flex;
-            flex-direction: column;
-            gap: 15px;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+
+        button, .button-link {
+            border: none;
+            border-radius: 999px;
+            padding: 11px 16px;
+            font-size: 14px;
+            cursor: pointer;
+            transition: transform 0.15s ease, opacity 0.15s ease, background 0.15s ease;
+        }
+
+        button:hover, .button-link:hover { transform: translateY(-1px); }
+        button:disabled { opacity: 0.45; cursor: not-allowed; transform: none; }
+
+        .primary { background: var(--primary); color: #fff; }
+        .soft { background: var(--primary-soft); color: var(--primary); }
+        .warn { background: rgba(180, 83, 9, 0.12); color: var(--warn); }
+        .danger { background: rgba(185, 28, 28, 0.12); color: var(--danger); }
+        .ghost { background: rgba(255,255,255,0.7); color: var(--ink); border: 1px solid var(--line); }
+
+        .layout {
+            display: block;
+        }
+
+        .toolbar {
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 14px;
+        }
+
+        .task-list {
+            display: grid;
+            gap: 14px;
         }
 
         .task-card {
-            background: var(--bg-card);
-            border: 1px solid var(--border);
-            border-radius: 16px;
             padding: 20px;
-            transition: all 0.2s ease;
-            position: relative;
-            overflow: hidden;
+            cursor: pointer;
+            transition: transform 0.18s ease, border-color 0.18s ease;
         }
 
-        .task-card:hover {
+        .task-card.active {
+            border-color: rgba(15, 118, 110, 0.28);
             transform: translateY(-2px);
-            background: var(--bg-card-hover);
-            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
         }
 
-        .task-card.is-deleting {
-            background: var(--bg-card-deleting);
-            border-color: rgba(59, 130, 246, 0.45);
-        }
-
-        .task-card.is-delete-failed {
-            background: var(--bg-card-failed);
-            border-color: rgba(239, 68, 68, 0.45);
-        }
-
-        .task-header {
+        .task-top {
             display: flex;
             justify-content: space-between;
-            margin-bottom: 15px;
-            gap: 12px;
+            gap: 16px;
+            align-items: flex-start;
         }
 
-        .task-title {
-            font-size: 1rem;
-            font-weight: 500;
-            color: var(--text-main);
+        .task-name {
+            font-size: 18px;
+            margin: 0 0 6px;
+            word-break: break-word;
+        }
+
+        .task-url {
+            color: var(--muted);
+            font-size: 13px;
             word-break: break-all;
-            margin-right: 15px;
-            line-height: 1.4;
-        }
-
-        .task-meta {
-            font-size: 0.8rem;
-            color: var(--text-muted);
-            margin-top: 5px;
-            display: flex;
-            align-items: center;
-            gap: 10px;
-        }
-
-        .status-chip {
-            display: inline-flex;
-            align-items: center;
-            gap: 8px;
-            padding: 6px 10px;
-            border-radius: 999px;
-            border: 1px solid currentColor;
-            font-size: 0.78rem;
-            font-weight: 600;
-            white-space: nowrap;
-            flex-shrink: 0;
-            background: rgba(255, 255, 255, 0.03);
-        }
-
-        .status-dot {
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-            background: currentColor;
-        }
-
-        /* Progress Bar */
-        .progress-container {
-            height: 8px;
-            background: #2d3748;
-            border-radius: 4px;
-            overflow: hidden;
-            margin-top: 15px;
-        }
-
-        .progress-bar {
-            height: 100%;
-            background: linear-gradient(90deg, var(--primary), #a78bfa);
-            border-radius: 4px;
-            width: 0%;
-            transition: width 0.5s ease;
-        }
-
-        .progress-bar.progress-indeterminate {
-            width: 100% !important;
-            background: linear-gradient(90deg, rgba(59, 130, 246, 0.18), rgba(59, 130, 246, 0.95), rgba(59, 130, 246, 0.18));
-            background-size: 220% 100%;
-            animation: progressSweep 1.4s linear infinite;
-        }
-
-        @keyframes progressSweep {
-            from {
-                background-position: 200% 0;
-            }
-
-            to {
-                background-position: -20% 0;
-            }
-        }
-
-        .progress-text {
-            font-size: 0.8rem;
-            color: var(--text-muted);
-            margin-top: 8px;
-            display: flex;
-            justify-content: space-between;
-            gap: 12px;
-        }
-
-        /* Actions */
-        .btn-group {
-            display: flex;
-            gap: 10px;
-            margin-top: 15px;
-            justify-content: flex-end;
-        }
-
-        .btn {
-            padding: 8px 16px;
-            border-radius: 8px;
-            font-size: 0.85rem;
-            font-weight: 500;
-            cursor: pointer;
-            border: none;
-            transition: background 0.2s;
-            display: flex;
-            align-items: center;
-            gap: 6px;
-        }
-
-        .btn-primary {
-            background: var(--primary);
-            color: white;
-        }
-
-        .btn-primary:hover {
-            background: var(--primary-hover);
-        }
-
-        .btn-danger {
-            background: rgba(239, 68, 68, 0.15);
-            color: var(--danger);
-        }
-
-        .btn-danger:hover {
-            background: rgba(239, 68, 68, 0.25);
-        }
-
-        .btn-warning {
-            background: rgba(245, 158, 11, 0.15);
-            color: var(--warning);
-        }
-
-        .btn-warning:hover {
-            background: rgba(245, 158, 11, 0.25);
-        }
-
-        .btn[disabled] {
-            opacity: 0.55;
-            cursor: not-allowed;
-        }
-
-        .btn[disabled]:hover {
-            background: inherit;
-        }
-
-        .btn-icon {
-            padding: 8px;
-            border-radius: 50%;
-            background: transparent;
-            color: var(--text-muted);
-            cursor: pointer;
-            border: none;
-        }
-
-        .btn-icon:hover {
-            color: var(--text-main);
-            background: rgba(255, 255, 255, 0.05);
-        }
-
-        /* Floating Action Button for Mobile */
-        .fab {
-            position: fixed;
-            bottom: 30px;
-            right: 30px;
-            width: 56px;
-            height: 56px;
-            border-radius: 28px;
-            background: var(--primary);
-            color: white;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.3);
-            border: none;
-            cursor: pointer;
-            font-size: 24px;
-            transition: transform 0.2s;
-            z-index: 100;
-        }
-
-        .fab:hover {
-            transform: scale(1.05);
-            background: var(--primary-hover);
-        }
-
-        /* Modal */
-        .modal-overlay {
-            position: fixed;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            background: rgba(0, 0, 0, 0.7);
-            backdrop-filter: blur(4px);
-            display: none;
-            justify-content: center;
-            align-items: center;
-            z-index: 1000;
-            padding: 20px;
-        }
-
-        .modal {
-            background: var(--bg-card);
-            border: 1px solid var(--border);
-            border-radius: 16px;
-            padding: 24px;
-            width: 100%;
-            max-width: 500px;
-            box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.3);
-            animation: modalSlide 0.3s cubic-bezier(0.16, 1, 0.3, 1);
-        }
-
-        @keyframes modalSlide {
-            from {
-                transform: translateY(20px);
-                opacity: 0;
-            }
-
-            to {
-                transform: translateY(0);
-                opacity: 1;
-            }
-        }
-
-        .modal-title {
-            font-size: 1.25rem;
-            font-weight: 600;
-            margin-bottom: 20px;
-        }
-
-        .form-group {
-            margin-bottom: 20px;
-        }
-
-        .form-label {
-            display: block;
-            margin-bottom: 8px;
-            font-size: 0.9rem;
-            color: var(--text-muted);
-        }
-
-        .form-input {
-            width: 100%;
-            padding: 12px;
-            background: rgba(0, 0, 0, 0.2);
-            border: 1px solid var(--border);
-            border-radius: 8px;
-            color: var(--text-main);
-            font-size: 1rem;
-        }
-
-        .form-input:focus {
-            outline: none;
-            border-color: var(--primary);
-        }
-
-        .modal-actions {
-            display: flex;
-            justify-content: flex-end;
-            gap: 12px;
-        }
-
-        /* Responsive */
-        @media (max-width: 600px) {
-            .container {
-                padding: 15px;
-            }
-
-            .task-header {
-                flex-direction: column;
-                gap: 10px;
-            }
-
-            .stat-value {
-                font-size: 1.5rem;
-            }
-
-            .btn-group {
-                width: 100%;
-                justify-content: space-between;
-            }
-
-            .btn {
-                flex: 1;
-                justify-content: center;
-            }
-        }
-
-        /* Toast */
-        .toast {
-            position: fixed;
-            top: 30px;
-            left: 50%;
-            transform: translateX(-50%) translateY(-150%);
-            background: var(--bg-card);
-            border: 1px solid var(--border);
-            color: var(--text-main);
-            padding: 12px 24px;
-            border-radius: 50px;
-            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.4);
-            transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1);
-            z-index: 99999;
-            display: flex;
-            align-items: center;
-            gap: 10px;
-        }
-
-        .toast.show {
-            transform: translateX(-50%) translateY(0);
-        }
-
-        /* Confirm Dialog */
-        .confirm-overlay {
-            position: fixed;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            background: rgba(0, 0, 0, 0.7);
-            backdrop-filter: blur(4px);
-            display: none;
-            justify-content: center;
-            align-items: center;
-            z-index: 2000;
-            padding: 20px;
-        }
-
-        .confirm-overlay.show {
-            display: flex;
-        }
-
-        .confirm-dialog {
-            background: var(--bg-card);
-            border: 1px solid var(--border);
-            border-radius: 20px;
-            padding: 0;
-            width: 100%;
-            max-width: 400px;
-            box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.4);
-            animation: confirmSlide 0.3s cubic-bezier(0.16, 1, 0.3, 1);
-            overflow: hidden;
-        }
-
-        @keyframes confirmSlide {
-            from {
-                transform: scale(0.9) translateY(20px);
-                opacity: 0;
-            }
-            to {
-                transform: scale(1) translateY(0);
-                opacity: 1;
-            }
-        }
-
-        .confirm-icon {
-            width: 64px;
-            height: 64px;
-            margin: 24px auto 16px;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 32px;
-        }
-
-        .confirm-icon.warning {
-            background: rgba(239, 68, 68, 0.15);
-            color: var(--danger);
-        }
-
-        .confirm-icon.danger {
-            background: rgba(239, 68, 68, 0.2);
-            color: var(--danger);
-        }
-
-        .confirm-title {
-            font-size: 1.25rem;
-            font-weight: 600;
-            text-align: center;
-            margin-bottom: 12px;
-            padding: 0 24px;
-            color: var(--text-main);
-        }
-
-        .confirm-message {
-            font-size: 0.95rem;
-            text-align: center;
-            color: var(--text-muted);
-            padding: 0 24px 24px;
             line-height: 1.5;
         }
 
-        .confirm-actions {
+        .status {
+            white-space: nowrap;
+            padding: 7px 12px;
+            border-radius: 999px;
+            font-size: 12px;
+            font-weight: 700;
+            border: 1px solid currentColor;
+        }
+
+        .progress {
+            margin: 16px 0 10px;
+            height: 10px;
+            border-radius: 999px;
+            background: rgba(31, 42, 44, 0.08);
+            overflow: hidden;
+        }
+
+        .progress > span {
+            display: block;
+            height: 100%;
+            width: 0;
+            border-radius: inherit;
+            background: linear-gradient(90deg, #0f766e, #0ea5a0);
+        }
+
+        .task-meta, .detail-grid, .item-row {
+            display: grid;
+            gap: 8px;
+        }
+
+        .task-meta {
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            margin-top: 12px;
+            font-size: 12px;
+            color: var(--muted);
+        }
+
+        .task-actions {
             display: flex;
-            border-top: 1px solid var(--border);
-            gap: 0;
+            gap: 10px;
+            flex-wrap: wrap;
+            margin-top: 16px;
         }
 
-        .confirm-btn {
-            flex: 1;
-            padding: 16px;
-            border: none;
-            background: transparent;
-            color: var(--text-main);
-            font-size: 0.95rem;
-            font-weight: 500;
-            cursor: pointer;
-            transition: background 0.2s;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            gap: 6px;
+        .empty {
+            padding: 34px 20px;
+            text-align: center;
+            color: var(--muted);
+            border: 1px dashed var(--line);
+            border-radius: 20px;
+            background: rgba(255,255,255,0.45);
         }
 
-        .confirm-btn:first-child {
-            border-right: 1px solid var(--border);
+        .toast {
+            position: fixed;
+            right: 20px;
+            bottom: 20px;
+            padding: 14px 16px;
+            background: rgba(31,42,44,0.92);
+            color: #fff;
+            border-radius: 16px;
+            opacity: 0;
+            transform: translateY(12px);
+            transition: all 0.2s ease;
         }
 
-        .confirm-btn:hover {
-            background: rgba(255, 255, 255, 0.05);
+        .toast.show {
+            opacity: 1;
+            transform: translateY(0);
         }
 
-        .confirm-btn.primary {
-            color: var(--primary);
-            font-weight: 600;
+        @media (max-width: 1100px) {
+            .hero {
+                grid-template-columns: 1fr;
+            }
         }
 
-        .confirm-btn.danger {
-            color: var(--danger);
-            font-weight: 600;
-        }
-
-        @media (max-width: 600px) {
-            .confirm-dialog {
-                max-width: 90%;
+        @media (max-width: 720px) {
+            .shell { padding: 18px 14px 32px; }
+            .stat-grid, .task-meta {
+                grid-template-columns: repeat(2, minmax(0, 1fr));
             }
         }
     </style>
 </head>
-
 <body>
-
-    <div class="container">
-        <header>
-            <h1>HLS Accelerator</h1>
-            <div class="header-actions">
-                <button class="btn-icon" id="btn-sync" title="Sync Progress">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M21 12a9 9 0 1 1-2.64-6.36"></path>
-                        <polyline points="21 3 21 9 15 9"></polyline>
-                    </svg>
-                </button>
-                <button class="btn-icon" id="btn-refresh" title="Refresh">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M23 4v6h-6"></path>
-                        <path d="M1 20v-6h6"></path>
-                        <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
-                    </svg>
-                </button>
+    <div class="shell">
+        <section class="hero">
+            <div class="hero-card">
+                <span class="eyebrow">HLS Download Orchestrator</span>
+                <h1>任务与分片同屏管理</h1>
+                <p class="hero-copy">统一查看任务状态、失败分片、暂停恢复和下载细节。页面只面向下载调度，不介入 m3u8 重写逻辑。</p>
+                <div class="stat-grid">
+                    <div class="stat"><div class="stat-value" id="stat-total">0</div><div class="stat-label">总任务</div></div>
+                    <div class="stat"><div class="stat-value" id="stat-active">0</div><div class="stat-label">下载中</div></div>
+                    <div class="stat"><div class="stat-value" id="stat-failed">0</div><div class="stat-label">失败任务</div></div>
+                    <div class="stat"><div class="stat-value" id="stat-items">0</div><div class="stat-label">总分片</div></div>
+                </div>
             </div>
-        </header>
-
-        <div class="stats-grid">
-            <div class="stat-card">
-                <div class="stat-value" id="stat-active">0</div>
-                <div class="stat-label">Active Tasks</div>
+            <div class="panel">
+                <h2>新增下载任务</h2>
+                <div class="form-grid">
+                    <div>
+                        <label for="task-name">任务名称</label>
+                        <input id="task-name" placeholder="可留空，默认从 URL 推导">
+                    </div>
+                    <div>
+                        <label for="task-url">M3U8 地址</label>
+                        <input id="task-url" placeholder="https://example.com/video.m3u8">
+                    </div>
+                    <div class="actions">
+                        <button class="primary" id="submit-task">创建任务</button>
+                        <button class="ghost" id="sync-all">全量对账</button>
+                        <button class="ghost" id="refresh-all">刷新列表</button>
+                    </div>
+                </div>
             </div>
-            <div class="stat-card">
-                <div class="stat-value" id="stat-storage">0</div>
-                <div class="stat-label">Total Tasks</div>
-            </div>
-        </div>
+        </section>
 
-        <div class="task-list" id="task-list">
-            <!-- Tasks will be injected here -->
-        </div>
+        <section class="layout">
+            <div class="panel">
+                <div class="toolbar">
+                    <h2>任务列表</h2>
+                    <div class="actions">
+                        <select id="status-filter">
+                            <option value="">全部状态</option>
+                            <option value="pending">pending</option>
+                            <option value="parsing">parsing</option>
+                            <option value="downloading">downloading</option>
+                            <option value="paused">paused</option>
+                            <option value="failed">failed</option>
+                            <option value="completed">completed</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="task-list" id="task-list"></div>
+            </div>
+        </section>
     </div>
 
-    <button class="fab" id="btn-add">
-        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <line x1="12" y1="5" x2="12" y2="19"></line>
-            <line x1="5" y1="12" x2="19" y2="12"></line>
-        </svg>
-    </button>
-
-    <!-- Add Task Modal -->
-    <div class="modal-overlay" id="add-modal">
-        <div class="modal">
-            <h2 class="modal-title">New Task</h2>
-            <div class="form-group">
-                <label class="form-label">Task Name</label>
-                <input type="text" class="form-input" id="input-name" placeholder="My Video">
-            </div>
-            <div class="form-group">
-                <label class="form-label">M3U8 URL</label>
-                <input type="text" class="form-input" id="input-url" placeholder="https://example.com/video.m3u8">
-            </div>
-            <div class="modal-actions">
-                <button class="btn" style="background:transparent; color: var(--text-muted)"
-                    id="btn-cancel">Cancel</button>
-                <button class="btn btn-primary" id="btn-submit">Start Download</button>
-            </div>
-        </div>
-    </div>
-
-    <div class="toast" id="toast">
-        <span id="toast-msg">Operation successful</span>
-    </div>
-
-    <!-- Confirm Dialog -->
-    <div class="confirm-overlay" id="confirm-overlay">
-        <div class="confirm-dialog">
-            <div class="confirm-icon" id="confirm-icon">
-                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <circle cx="12" cy="12" r="10"></circle>
-                    <line x1="12" y1="8" x2="12" y2="12"></line>
-                    <line x1="12" y1="16" x2="12.01" y2="16"></line>
-                </svg>
-            </div>
-            <h3 class="confirm-title" id="confirm-title">确认操作</h3>
-            <p class="confirm-message" id="confirm-message">确定要执行此操作吗？</p>
-            <div class="confirm-actions">
-                <button class="confirm-btn" id="confirm-cancel">取消</button>
-                <button class="confirm-btn" id="confirm-ok">确定</button>
-            </div>
-        </div>
-    </div>
+    <div class="toast" id="toast"></div>
 
     <script>
-        const API_BASE = '/api';
-        const DEFAULT_POLL_INTERVAL = 10000;
-        const BUSY_POLL_INTERVAL = 3000;
+        const API = '/api/v1';
+        const state = {
+            tasks: [],
+            taskFilter: '',
+            pollTimer: null,
+            actionLocks: new Set()
+        };
 
-        // State
-        let tasks = [];
-        let pendingDeletes = new Set();
-        let pollTimer = null;
+        const el = {
+            taskList: document.getElementById('task-list'),
+            taskName: document.getElementById('task-name'),
+            taskURL: document.getElementById('task-url'),
+            statusFilter: document.getElementById('status-filter'),
+            toast: document.getElementById('toast')
+        };
 
-        // DOM Elements
-        const elTaskList = document.getElementById('task-list');
-        const elAddModal = document.getElementById('add-modal');
-        const elInputName = document.getElementById('input-name');
-        const elInputUrl = document.getElementById('input-url');
-        const elToast = document.getElementById('toast');
-        const elStatActive = document.getElementById('stat-active');
-        const elStatStorage = document.getElementById('stat-storage');
+        document.getElementById('submit-task').addEventListener('click', createTask);
+        document.getElementById('sync-all').addEventListener('click', syncAll);
+        document.getElementById('refresh-all').addEventListener('click', fetchTasks);
+        el.statusFilter.addEventListener('change', () => {
+            state.taskFilter = el.statusFilter.value;
+            renderTasks();
+        });
 
-        // Init
         fetchTasks();
-        scheduleNextPoll();
 
-        // Event Listeners
-        document.getElementById('btn-add').addEventListener('click', () => {
-            elAddModal.style.display = 'flex';
-            elInputName.focus();
-        });
-
-        document.getElementById('btn-cancel').addEventListener('click', () => {
-            elAddModal.style.display = 'none';
-            elInputName.value = '';
-            elInputUrl.value = '';
-        });
-
-        document.getElementById('btn-refresh').addEventListener('click', fetchTasks);
-        document.getElementById('btn-sync').addEventListener('click', syncTaskProgress);
-
-        document.getElementById('btn-submit').addEventListener('click', async () => {
-            const name = elInputName.value.trim();
-            const url = elInputUrl.value.trim();
-            if (!name || !url) return;
-
-            try {
-                const res = await fetch(`${API_BASE}/tasks`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ name, url })
-                });
-                if (res.ok) {
-                    showToast('Task added successfully');
-                    elAddModal.style.display = 'none';
-                    elInputName.value = '';
-                    elInputUrl.value = '';
-                    fetchTasks();
-                } else {
-                    const errorText = await res.text();
-                    showToast(errorText || 'Failed to add task', true);
-                }
-            } catch (e) {
-                showToast('Error connecting to server', true);
-            }
-        });
-
-        // Functions
         async function fetchTasks() {
-            try {
-                const res = await fetch(`${API_BASE}/tasks`);
-                const data = await res.json();
-                tasks = data;
-                pendingDeletes.forEach(id => {
-                    if (!tasks.some(task => task.id === id)) {
-                        pendingDeletes.delete(id);
-                    }
-                });
-                renderTasks();
-                updateStats();
-            } catch (e) {
-                console.error('Failed to fetch tasks', e);
-            } finally {
-                scheduleNextPoll();
-            }
+            const query = state.taskFilter ? `?status=${encodeURIComponent(state.taskFilter)}` : '';
+            const res = await fetch(`${API}/tasks${query}`);
+            const data = await res.json();
+            state.tasks = data.items || [];
+            updateStats();
+            renderTasks();
+            schedulePoll();
         }
 
-        async function syncTaskProgress() {
-            try {
-                const res = await fetch(`${API_BASE}/tasks/sync`, { method: 'POST' });
-                if (!res.ok) {
-                    const txt = await res.text();
-                    showToast(txt || 'Failed to sync progress', true);
-                    return;
-                }
-
-                const data = await res.json();
-                const updated = Number(data.updated || 0);
-                showToast(updated > 0 ? `Synced ${updated} segments` : 'Progress already up to date');
-                fetchTasks();
-            } catch (e) {
-                showToast('Error syncing progress', true);
-            }
-        }
-
-        async function syncSingleTask(id) {
-            try {
-                const res = await fetch(`${API_BASE}/tasks/${id}/sync`, { method: 'POST' });
-                if (!res.ok) {
-                    const txt = await res.text();
-                    showToast(txt || 'Failed to sync task', true);
-                    return;
-                }
-
-                const data = await res.json();
-                const updated = Number(data.updated || 0);
-                const reset = Number(data.failed_reset || 0);
-                if (updated > 0 || reset > 0) {
-                    showToast(`Resumed task: synced ${updated} items, retried ${reset} failed items`);
-                } else {
-                    showToast('Task resumed');
-                }
-                fetchTasks();
-            } catch (e) {
-                showToast('Error resuming task', true);
-            }
-        }
-
-        function scheduleNextPoll() {
-            if (pollTimer) {
-                clearTimeout(pollTimer);
-            }
-            const hasBusyTask = tasks.some(task => task.status === 'deleting' || task.status === 'delete_failed' || task.status === 'stopping') || pendingDeletes.size > 0;
-            const delay = hasBusyTask ? BUSY_POLL_INTERVAL : DEFAULT_POLL_INTERVAL;
-            pollTimer = setTimeout(fetchTasks, delay);
+        function schedulePoll() {
+            clearTimeout(state.pollTimer);
+            const busy = state.tasks.some(task => ['downloading', 'parsing'].includes(task.status));
+            state.pollTimer = setTimeout(fetchTasks, busy ? 3000 : 8000);
         }
 
         function updateStats() {
-            const activeCount = tasks.filter(task => task.status === 'downloading' || task.status === 'deleting' || task.status === 'stopping').length;
-            elStatActive.innerText = activeCount;
-            elStatStorage.innerText = `${tasks.length} Tasks`;
+            const totalItems = state.tasks.reduce((sum, task) => sum + Number(task.total_items || 0), 0);
+            document.getElementById('stat-total').textContent = state.tasks.length;
+            document.getElementById('stat-active').textContent = state.tasks.filter(task => task.status === 'downloading').length;
+            document.getElementById('stat-failed').textContent = state.tasks.filter(task => task.status === 'failed').length;
+            document.getElementById('stat-items').textContent = totalItems;
         }
 
         function renderTasks() {
-            elTaskList.innerHTML = '';
-            tasks.forEach(task => {
-                let percent = task.total_segments > 0
-                    ? Math.round((task.downloaded_segments / task.total_segments) * 100)
-                    : 0;
-                if (percent > 100) percent = 100;
+            const tasks = state.taskFilter ? state.tasks.filter(task => task.status === state.taskFilter) : state.tasks;
+            if (!tasks.length) {
+                el.taskList.innerHTML = '<div class="empty">当前没有任务。</div>';
+                return;
+            }
 
-                // Determine status display
-                let statusLabel = task.status;
-                let statusColor = "var(--text-muted)";
-                let progressBarColor = "";
-                let progressTextRight = `${percent}%`;
-                let progressExtraText = `${task.downloaded_segments} / ${task.total_segments} segments`;
-                let cardStateClass = "";
-                let isProgressIndeterminate = false;
-
-                if (task.status === 'completed' || percent === 100) {
-                    statusLabel = "Completed";
-                    statusColor = "var(--success)";
-                    progressBarColor = "var(--success)";
-                } else if (task.status === 'stopping') {
-                    statusLabel = "Stopping";
-                    statusColor = "var(--warning)";
-                    progressTextRight = "Stopping";
-                    progressExtraText = "Download submission is being canceled";
-                    cardStateClass = "is-deleting";
-                    isProgressIndeterminate = true;
-                } else if (task.status === 'stopped') {
-                    statusLabel = "Stopped";
-                    statusColor = "var(--danger)";
-                    progressBarColor = "var(--danger)";
-                } else if (task.status === 'downloading') {
-                    statusLabel = "Downloading";
-                    statusColor = "var(--primary)";
-                } else if (task.status === 'deleting') {
-                    statusLabel = "Deleting";
-                    statusColor = "var(--primary)";
-                    progressTextRight = "Cleaning up";
-                    progressExtraText = "Files are being removed in the background";
-                    cardStateClass = "is-deleting";
-                    isProgressIndeterminate = true;
-                } else if (task.status === 'delete_failed') {
-                    statusLabel = "Delete Failed";
-                    statusColor = "var(--danger)";
-                    progressBarColor = "var(--danger)";
-                    progressTextRight = "Retry needed";
-                    progressExtraText = "Background cleanup failed. You can delete again.";
-                    cardStateClass = "is-delete-failed";
-                }
-
-                // Action Buttons
-                let actionButtons = '';
-                const isDeleting = task.status === 'deleting' || task.status === 'stopping';
-
-                actionButtons += `
-                     <a href="/proxy/m3u8/${encodeURIComponent(task.original_url)}" target="_blank" class="btn btn-primary" style="text-decoration:none; ${isDeleting ? 'pointer-events:none; opacity:0.55;' : ''}">
-                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                           <polygon points="5 3 19 12 5 21 5 3"></polygon>
-                        </svg>
-                        Play
-                    </a>`;
-
-                if (task.status === 'downloading') {
-                    actionButtons += `
-                    <button class="btn btn-danger stop-btn" data-id="${task.id}">
-                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                             <rect x="6" y="4" width="4" height="16"></rect>
-                             <rect x="14" y="4" width="4" height="16"></rect>
-                        </svg>
-                        Stop
-                    </button>`;
-                } else if (task.status === 'deleting' || task.status === 'stopping') {
-                    actionButtons += `
-                    <button class="btn btn-primary" disabled>
-                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <path d="M12 2v4"></path>
-                            <path d="M12 18v4"></path>
-                            <path d="m4.93 4.93 2.83 2.83"></path>
-                            <path d="m16.24 16.24 2.83 2.83"></path>
-                            <path d="M2 12h4"></path>
-                            <path d="M18 12h4"></path>
-                            <path d="m4.93 19.07 2.83-2.83"></path>
-                            <path d="m16.24 7.76 2.83-2.83"></path>
-                        </svg>
-                        ${task.status === 'stopping' ? 'Stopping' : 'Deleting'}
-                    </button>`;
-                } else if (task.status === 'stopped') {
-                    actionButtons += `
-                    <button class="btn btn-warning sync-btn" data-id="${task.id}">
-                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <path d="M21 12a9 9 0 1 1-2.64-6.36"></path>
-                            <polyline points="21 3 21 9 15 9"></polyline>
-                        </svg>
-                        Resume
-                    </button>`;
-                    const deleteLabel = 'Delete';
-                    const deleteClass = 'btn btn-danger delete-btn';
-                    actionButtons += `
-                    <button class="${deleteClass}" data-id="${task.id}">
-                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                           <polyline points="3 6 5 6 21 6"></polyline>
-                           <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
-                        </svg>
-                        ${deleteLabel}
-                    </button>`;
-                } else {
-                    const deleteLabel = task.status === 'delete_failed' ? 'Retry Delete' : 'Delete';
-                    const deleteClass = task.status === 'delete_failed' ? 'btn btn-warning delete-btn' : 'btn btn-danger delete-btn';
-                    actionButtons += `
-                    <button class="${deleteClass}" data-id="${task.id}">
-                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                           <polyline points="3 6 5 6 21 6"></polyline>
-                           <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
-                        </svg>
-                        ${deleteLabel}
-                    </button>`;
-                }
-
-                const card = document.createElement('div');
-                card.className = `task-card ${cardStateClass}`.trim();
-                card.innerHTML = `
-                <div class="task-header">
-                    <div>
-                        <div class="task-title" title="${task.name || task.original_url}">${task.name || 'Untitled Task'}</div>
-                        <div class="task-meta">
-                            <span title="${task.original_url}">${task.original_url}</span>
+            el.taskList.innerHTML = tasks.map(task => {
+                const progress = Math.round((Number(task.progress || 0)) * 100);
+                const color = statusColor(task.status);
+                return `
+                    <article class="task-card" data-id="${task.id}">
+                        <div class="task-top">
+                            <div>
+                                <h3 class="task-name">${escapeHTML(task.name || 'Untitled Task')}</h3>
+                                <div class="task-url">${escapeHTML(task.original_url)}</div>
+                            </div>
+                            <div class="status" style="color:${color};">${task.status}</div>
                         </div>
-                    </div>
-                    <div class="status-chip" style="color: ${statusColor};">
-                        <span class="status-dot"></span>
-                        <span>${statusLabel}</span>
-                    </div>
-                </div>
-                <div class="task-meta">
-                    <span>ID: ${task.id.substring(0, 8)}...</span>
-                    <span>•</span>
-                    <span>${progressExtraText}</span>
-                </div>
-                <div class="progress-container">
-                    <div class="progress-bar ${isProgressIndeterminate ? 'progress-indeterminate' : ''}" style="width: ${isProgressIndeterminate ? 100 : percent}%; ${progressBarColor ? 'background:' + progressBarColor : ''}"></div>
-                </div>
-                <div class="progress-text">
-                    <span style="color: ${statusColor};">${statusLabel === 'Delete Failed' ? 'Background cleanup needs attention' : statusLabel === 'Deleting' ? 'Delete request accepted' : statusLabel === 'Stopping' ? 'Stop request accepted' : task.status === 'downloading' ? 'Download in progress' : statusLabel}</span>
-                    <span style="color: ${statusColor}">${progressTextRight}</span>
-                </div>
-                <div class="btn-group">
-                    ${actionButtons}
-                </div>
-            `;
+                        <div class="progress"><span style="width:${progress}%; background:${progressColor(task.status)}"></span></div>
+                        <div style="font-size:13px; color:var(--muted);">${task.downloaded_segments}/${task.total_segments || task.total_items} 已完成，失败 ${task.failed_items || 0}</div>
+                        <div class="task-meta">
+                            <div>任务ID<br><strong>${task.id.slice(0, 10)}</strong></div>
+                            <div>进度<br><strong>${progress}%</strong></div>
+                            <div>分片<br><strong>${task.done_items}/${task.total_items}</strong></div>
+                            <div>状态<br><strong>${task.status}</strong></div>
+                        </div>
+                        <div class="task-actions">
+                            <button class="primary" data-action="play">代理播放</button>
+                            ${task.status === 'downloading' ? `<button class="warn" data-action="pause" ${state.actionLocks.has(task.id) ? 'disabled' : ''}>${state.actionLocks.has(task.id) ? '处理中' : '暂停'}</button>` : ''}
+                            ${['paused', 'failed'].includes(task.status) ? `<button class="soft" data-action="resume" ${state.actionLocks.has(task.id) ? 'disabled' : ''}>${state.actionLocks.has(task.id) ? '处理中' : '恢复'}</button>` : ''}
+                            ${task.failed_items > 0 ? `<button class="soft" data-action="retry" ${state.actionLocks.has(task.id) ? 'disabled' : ''}>${state.actionLocks.has(task.id) ? '处理中' : '重试失败'}</button>` : ''}
+                            <button class="danger" data-action="delete" ${state.actionLocks.has(task.id) ? 'disabled' : ''}>${state.actionLocks.has(task.id) ? '处理中' : '删除'}</button>
+                        </div>
+                    </article>
+                `;
+            }).join('');
 
-                const stopBtn = card.querySelector('.stop-btn');
-                if (stopBtn) stopBtn.addEventListener('click', () => stopTask(task.id));
-
-                const syncBtn = card.querySelector('.sync-btn');
-                if (syncBtn) syncBtn.addEventListener('click', () => syncSingleTask(task.id));
-
-                const deleteBtn = card.querySelector('.delete-btn');
-                if (deleteBtn) deleteBtn.addEventListener('click', () => deleteTask(task.id));
-
-                elTaskList.appendChild(card);
-            });
-
-            if (tasks.length === 0) {
-                elTaskList.innerHTML = `<div style="text-align:center; color:var(--text-muted); padding: 40px;">No active tasks. Tap + to add one.</div>`;
-            }
-        }
-
-        async function stopTask(id) {
-            const confirmed = await showConfirm('停止任务', '确定要停止此任务吗？', 'warning');
-            if (!confirmed) return;
-            try {
-                const res = await fetch(`${API_BASE}/tasks/${id}/stop`, { method: 'POST' });
-                if (res.ok) {
-                    showToast(res.status === 202 ? 'Task stopping' : 'Task stopped');
-                    fetchTasks();
-                } else {
-                    showToast('Failed to stop task', true);
-                }
-            } catch (e) {
-                showToast('Error stopping task', true);
-            }
-        }
-
-        async function deleteTask(id) {
-            const task = tasks.find(item => item.id === id);
-            const isRetry = task && task.status === 'delete_failed';
-            const confirmed = await showConfirm(
-                isRetry ? '重试删除任务' : '删除任务',
-                isRetry
-                    ? '上次后台删除没有完成。现在重试会继续清理残留文件和记录。'
-                    : '确定要删除此任务的文件和记录吗？删除会先进入后台清理状态，然后自动完成。',
-                'danger'
-            );
-            if (!confirmed) return;
-
-            try {
-                const res = await fetch(`${API_BASE}/tasks/${id}`, { method: 'DELETE' });
-                if (res.ok) {
-                    pendingDeletes.add(id);
-                    tasks = tasks.map(task => task.id === id ? {
-                        ...task,
-                        status: 'deleting',
-                        downloaded_segments: 0
-                    } : task);
-                    renderTasks();
-                    updateStats();
-                    scheduleNextPoll();
-                    showToast(isRetry ? 'Delete retried in background' : 'Delete started in background');
-                    fetchTasks();
-                } else {
-                    const txt = await res.text();
-                    showToast(txt || 'Failed to delete', true);
-                }
-            } catch (e) {
-                showToast('Error deleting task', true);
-            }
-        }
-
-        function showToast(msg, isError = false) {
-            const el = document.getElementById('toast-msg');
-            el.innerText = msg;
-            el.parentElement.style.borderColor = isError ? 'var(--danger)' : 'var(--border)';
-            document.getElementById('toast').classList.add('show');
-            setTimeout(() => {
-                document.getElementById('toast').classList.remove('show');
-            }, 3000);
-        }
-
-        // Custom Confirm Dialog
-        function showConfirm(title, message, type = 'warning') {
-            return new Promise((resolve) => {
-                const overlay = document.getElementById('confirm-overlay');
-                const iconEl = document.getElementById('confirm-icon');
-                const titleEl = document.getElementById('confirm-title');
-                const messageEl = document.getElementById('confirm-message');
-                const cancelBtn = document.getElementById('confirm-cancel');
-                const okBtn = document.getElementById('confirm-ok');
-
-                // Set content
-                titleEl.textContent = title;
-                messageEl.textContent = message;
-
-                // Set icon based on type
-                iconEl.className = 'confirm-icon ' + type;
-                if (type === 'danger') {
-                    iconEl.innerHTML = `
-                        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>
-                            <line x1="12" y1="9" x2="12" y2="13"></line>
-                            <line x1="12" y1="17" x2="12.01" y2="17"></line>
-                        </svg>
-                    `;
-                    okBtn.className = 'confirm-btn danger';
-                } else {
-                    iconEl.innerHTML = `
-                        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <circle cx="12" cy="12" r="10"></circle>
-                            <line x1="12" y1="8" x2="12" y2="12"></line>
-                            <line x1="12" y1="16" x2="12.01" y2="16"></line>
-                        </svg>
-                    `;
-                    okBtn.className = 'confirm-btn primary';
-                }
-
-                // Show overlay
-                overlay.classList.add('show');
-
-                // Handle cancel
-                const handleCancel = () => {
-                    overlay.classList.remove('show');
-                    cancelBtn.removeEventListener('click', handleCancel);
-                    okBtn.removeEventListener('click', handleOk);
-                    overlay.removeEventListener('click', handleOverlayClick);
-                    resolve(false);
-                };
-
-                // Handle confirm
-                const handleOk = () => {
-                    overlay.classList.remove('show');
-                    cancelBtn.removeEventListener('click', handleCancel);
-                    okBtn.removeEventListener('click', handleOk);
-                    overlay.removeEventListener('click', handleOverlayClick);
-                    resolve(true);
-                };
-
-                // Handle overlay click (only close if clicking overlay itself, not dialog)
-                const handleOverlayClick = (e) => {
-                    if (e.target === overlay) {
-                        handleCancel();
+            [...el.taskList.querySelectorAll('.task-card')].forEach(card => {
+                card.addEventListener('click', event => {
+                    const action = event.target.getAttribute('data-action');
+                    const id = card.dataset.id;
+                    if (action) {
+                        event.stopPropagation();
+                        quickAction(id, action);
                     }
-                };
-
-                cancelBtn.addEventListener('click', handleCancel);
-                okBtn.addEventListener('click', handleOk);
-                overlay.addEventListener('click', handleOverlayClick);
+                });
             });
+        }
+
+        async function createTask() {
+            const name = el.taskName.value.trim();
+            const url = el.taskURL.value.trim();
+            if (!url) {
+                toast('请输入 m3u8 地址', true);
+                return;
+            }
+            const res = await fetch(`${API}/tasks`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name, url })
+            });
+            if (!res.ok) {
+                toast(await res.text(), true);
+                return;
+            }
+            el.taskName.value = '';
+            el.taskURL.value = '';
+            toast('任务已提交');
+            fetchTasks();
+        }
+
+        async function quickAction(id, action) {
+            const task = state.tasks.find(item => item.id === id);
+            if (!task) return;
+            if (action === 'play') {
+                window.open(`/proxy/m3u8/${encodeURIComponent(task.original_url)}`, '_blank');
+                return;
+            }
+            if (action === 'delete') {
+                await taskAction(id, '', { method: 'DELETE' });
+                return;
+            }
+            if (action === 'retry') {
+                await taskAction(id, 'retry', { method: 'POST', body: JSON.stringify({ item_ids: [] }) });
+                return;
+            }
+            await taskAction(id, action);
+        }
+
+        async function taskAction(taskID, action, override = null) {
+            if (!taskID) return;
+            if (state.actionLocks.has(taskID)) return;
+            let url = `${API}/tasks/${taskID}`;
+            let options = override || { method: 'POST' };
+            if (action) {
+                url += `/${action}`;
+            }
+            if (!confirm(`确认执行 ${action || 'delete'} 操作？`)) return;
+            state.actionLocks.add(taskID);
+            applyOptimisticTaskAction(taskID, action);
+            renderTasks();
+            if (options.body && !options.headers) {
+                options.headers = { 'Content-Type': 'application/json' };
+            }
+            const res = await fetch(url, options);
+            if (!res.ok) {
+                state.actionLocks.delete(taskID);
+                await fetchTasks();
+                toast(await res.text(), true);
+                return;
+            }
+            toast(action ? `${action} 已执行` : '任务已删除');
+            state.actionLocks.delete(taskID);
+            await fetchTasks();
+        }
+
+        function applyOptimisticTaskAction(taskID, action) {
+            state.tasks = state.tasks.map(task => {
+                if (task.id !== taskID) return task;
+                if (action === 'pause') {
+                    return { ...task, status: 'paused' };
+                }
+                if (action === 'resume' || action === 'retry') {
+                    return { ...task, status: 'downloading' };
+                }
+                return task;
+            }).filter(task => !(task.id === taskID && action === ''));
+        }
+
+        async function syncAll() {
+            const res = await fetch(`${API}/tasks/sync`, { method: 'POST' });
+            if (!res.ok) {
+                toast(await res.text(), true);
+                return;
+            }
+            const data = await res.json();
+            toast(`已对账 ${data.updated || 0} 个分片`);
+            fetchTasks();
+        }
+
+        function toast(message, isError = false) {
+            el.toast.textContent = message || (isError ? '操作失败' : '操作成功');
+            el.toast.style.background = isError ? 'rgba(185, 28, 28, 0.94)' : 'rgba(31,42,44,0.92)';
+            el.toast.classList.add('show');
+            clearTimeout(window.__toastTimer);
+            window.__toastTimer = setTimeout(() => el.toast.classList.remove('show'), 2400);
+        }
+
+        function statusColor(status) {
+            switch (status) {
+                case 'completed': return 'var(--ok)';
+                case 'failed': return 'var(--danger)';
+                case 'paused': return 'var(--warn)';
+                case 'downloading': return 'var(--primary)';
+                default: return 'var(--muted)';
+            }
+        }
+
+        function progressColor(status) {
+            switch (status) {
+                case 'completed': return 'linear-gradient(90deg, #16a34a, #22c55e)';
+                case 'failed': return 'linear-gradient(90deg, #dc2626, #ef4444)';
+                case 'paused': return 'linear-gradient(90deg, #d97706, #f59e0b)';
+                default: return 'linear-gradient(90deg, #0f766e, #0ea5a0)';
+            }
+        }
+
+        function escapeHTML(value) {
+            return String(value ?? '').replace(/[&<>"']/g, char => ({
+                '&': '&amp;',
+                '<': '&lt;',
+                '>': '&gt;',
+                '"': '&quot;',
+                "'": '&#39;'
+            }[char]));
         }
     </script>
 </body>
-
 </html>

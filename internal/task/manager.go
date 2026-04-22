@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"hls-accelerator/internal/cache"
 	"hls-accelerator/internal/downloader"
@@ -14,6 +15,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -24,10 +26,15 @@ type Manager struct {
 	aria2             *downloader.Aria2Client
 	db                *sql.DB
 	deleteSem         chan struct{}
-	progressNotifyCh  chan string
+	progressNotifyCh  chan aria2NotificationEvent
 	progressDeduperMu sync.Mutex
 	progressInflight  map[string]struct{}
 	progressRecent    map[string]time.Time
+}
+
+type aria2NotificationEvent struct {
+	Method string
+	GID    string
 }
 
 type AddTaskRequest struct {
@@ -35,12 +42,38 @@ type AddTaskRequest struct {
 	URL  string `json:"url"`
 }
 
+type RetryTaskRequest struct {
+	ItemIDs []int64 `json:"item_ids"`
+}
+
+type TaskSummary struct {
+	ID                 string     `json:"id"`
+	Name               string     `json:"name"`
+	OriginalURL        string     `json:"original_url"`
+	Status             string     `json:"status"`
+	TotalSegments      int        `json:"total_segments"`
+	DownloadedSegments int        `json:"downloaded_segments"`
+	TotalItems         int        `json:"total_items"`
+	DoneItems          int        `json:"done_items"`
+	FailedItems        int        `json:"failed_items"`
+	CreatedTime        time.Time  `json:"created_time"`
+	UpdatedTime        time.Time  `json:"updated_time"`
+	FinishedTime       *time.Time `json:"finished_time,omitempty"`
+	OutputDir          string     `json:"output_dir"`
+	Progress           float64    `json:"progress"`
+}
+
+type TaskDetail struct {
+	TaskSummary
+	Extra string `json:"extra"`
+}
+
 func NewManager(aria2 *downloader.Aria2Client, db *sql.DB) (*Manager, error) {
 	m := &Manager{
 		aria2:            aria2,
 		db:               db,
 		deleteSem:        make(chan struct{}, 1),
-		progressNotifyCh: make(chan string, 2048),
+		progressNotifyCh: make(chan aria2NotificationEvent, 2048),
 		progressInflight: make(map[string]struct{}),
 		progressRecent:   make(map[string]time.Time),
 	}
@@ -54,88 +87,176 @@ func NewManager(aria2 *downloader.Aria2Client, db *sql.DB) (*Manager, error) {
 	return m, nil
 }
 
-// GetTasks returns list of tasks using DB-backed progress snapshots.
-func (m *Manager) GetTasks() ([]map[string]interface{}, error) {
+func (m *Manager) GetTasks() ([]TaskSummary, error) {
 	dbTasks, err := m.ListTasksDB()
 	if err != nil {
 		return nil, err
 	}
-
-	tasks := []map[string]interface{}{}
-
+	out := make([]TaskSummary, 0, len(dbTasks))
 	for _, meta := range dbTasks {
-		downloaded := meta.DownloadedSegments
-		if meta.Status == "completed" && downloaded < meta.TotalSegments {
-			downloaded = meta.TotalSegments
-			go m.UpdateTaskDownloadedSegments(meta.ID, downloaded)
-		}
-
-		tasks = append(tasks, map[string]interface{}{
-			"id":                  meta.ID,
-			"name":                meta.Name,
-			"original_url":        meta.OriginalURL,
-			"total_segments":      meta.TotalSegments,
-			"downloaded_segments": downloaded,
-			"created_time":        meta.CreatedTime,
-			"status":              meta.Status,
-		})
+		out = append(out, summarizeTask(meta))
 	}
-	return tasks, nil
+	return out, nil
+}
+
+func summarizeTask(meta TaskMetadata) TaskSummary {
+	totalForProgress := meta.TotalSegments
+	doneForProgress := meta.DownloadedSegments
+	if totalForProgress <= 0 {
+		totalForProgress = meta.TotalItems
+		doneForProgress = meta.DoneItems
+	}
+	progress := 0.0
+	if totalForProgress > 0 {
+		progress = float64(doneForProgress) / float64(totalForProgress)
+		if progress > 1 {
+			progress = 1
+		}
+	}
+	return TaskSummary{
+		ID:                 meta.ID,
+		Name:               meta.Name,
+		OriginalURL:        meta.OriginalURL,
+		Status:             meta.Status,
+		TotalSegments:      meta.TotalSegments,
+		DownloadedSegments: meta.DownloadedSegments,
+		TotalItems:         meta.TotalItems,
+		DoneItems:          meta.DoneItems,
+		FailedItems:        meta.FailedItems,
+		CreatedTime:        meta.CreatedTime,
+		UpdatedTime:        meta.UpdatedTime,
+		FinishedTime:       meta.FinishedTime,
+		OutputDir:          meta.OutputDir,
+		Progress:           progress,
+	}
+}
+
+func (m *Manager) GetTaskDetail(taskID string) (*TaskDetail, error) {
+	meta, err := m.GetTask(taskID)
+	if err != nil {
+		return nil, err
+	}
+	detail := &TaskDetail{
+		TaskSummary: summarizeTask(*meta),
+		Extra:       meta.Extra,
+	}
+	return detail, nil
+}
+
+func (m *Manager) PauseTask(id string) (int, error) {
+	items, err := m.ListTaskItemsByTask(id, "")
+	if err != nil {
+		return 0, err
+	}
+	var gids []string
+	for _, item := range items {
+		switch item.Status {
+		case taskItemStatusQueued, taskItemStatusDownloading:
+			if item.Aria2GID != "" {
+				gids = append(gids, item.Aria2GID)
+			}
+		}
+	}
+	if m.aria2 != nil && len(gids) > 0 {
+		_ = m.aria2.BatchPause(gids)
+	}
+	res, err := m.db.Exec(`
+	UPDATE task_item
+	SET status = ?, updated_time = datetime('now')
+	WHERE task_id = ? AND status IN (?, ?, ?, ?)
+	`, taskItemStatusPaused, id, taskItemStatusPending, taskItemStatusQueued, taskItemStatusDownloading, taskItemStatusSubmitting)
+	if err != nil {
+		return 0, err
+	}
+	if err := m.AggregateTask(id); err != nil {
+		return 0, err
+	}
+	affected, _ := res.RowsAffected()
+	return int(affected), nil
 }
 
 func (m *Manager) StopTask(id string) error {
-	status, _, err := m.MarkTaskStopping(id)
-	if err != nil {
-		return err
-	}
-	if status == "stopped" {
-		return nil
-	}
+	_, err := m.PauseTask(id)
+	return err
+}
 
-	// Stop only downloads that are still active/waiting in aria2. Historical
-	// completed GIDs do not consume network resources and make stop needlessly slow.
-	if m.aria2 != nil {
-		dir := cache.GetTaskDir(id)
-		if _, err := m.aria2.ForceRemoveTaskDownloads(dir); err != nil {
-			// Fall back to the previous DB-driven GID sweep if queue introspection fails.
-			gids, gidErr := m.GetTaskItemGIDs(id)
-			if gidErr != nil {
-				return fmt.Errorf("failed to inspect aria2 queue: %v (and failed to get task gids: %v)", err, gidErr)
-			}
-			m.aria2.ForceRemoveMany(gids)
+func (m *Manager) ResumeTask(id string) (int, error) {
+	items, err := m.ListTaskItemsByTask(id, taskItemStatusPaused)
+	if err != nil {
+		return 0, err
+	}
+	var gids []string
+	for _, item := range items {
+		if item.Aria2GID != "" {
+			gids = append(gids, item.Aria2GID)
 		}
 	}
-
-	if _, err := m.ResetQueuedTaskItemsToPending(id); err != nil {
-		return fmt.Errorf("failed to reset queued task items: %w", err)
+	if m.aria2 != nil && len(gids) > 0 {
+		_ = m.aria2.BatchUnpause(gids)
 	}
+	if _, err := m.db.Exec(`
+	UPDATE task_item
+	SET status = CASE WHEN aria2_gid IS NOT NULL AND aria2_gid != '' THEN ? ELSE ? END,
+		updated_time = datetime('now')
+	WHERE task_id = ? AND status = ?
+	`, taskItemStatusQueued, taskItemStatusPending, id, taskItemStatusPaused); err != nil {
+		return 0, err
+	}
+	if err := m.AggregateTask(id); err != nil {
+		return 0, err
+	}
+	return len(items), nil
+}
 
-	return m.UpdateTaskStatus(id, "stopped")
+func (m *Manager) RetryTask(id string, itemIDs []int64) (int, error) {
+	if len(itemIDs) == 0 {
+		return m.ResetFailedTaskItemsToPending(id)
+	}
+	placeholders := make([]string, len(itemIDs))
+	args := make([]interface{}, 0, len(itemIDs)+2)
+	args = append(args, id)
+	for i, itemID := range itemIDs {
+		placeholders[i] = "?"
+		args = append(args, itemID)
+	}
+	args = append(args, taskItemStatusFailed)
+	query := fmt.Sprintf(`
+	UPDATE task_item
+	SET status = ?, aria2_gid = NULL, last_error = '', updated_time = datetime('now')
+	WHERE task_id = ? AND id IN (%s) AND status = ?
+	`, strings.Join(placeholders, ","))
+	execArgs := make([]interface{}, 0, len(args)+1)
+	execArgs = append(execArgs, taskItemStatusPending)
+	execArgs = append(execArgs, args...)
+	res, err := m.db.Exec(query, execArgs...)
+	if err != nil {
+		return 0, err
+	}
+	if err := m.AggregateTask(id); err != nil {
+		return 0, err
+	}
+	affected, _ := res.RowsAffected()
+	return int(affected), nil
 }
 
 func (m *Manager) DeleteTask(id string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	// Check status first
 	meta, err := m.GetTask(id)
 	if err != nil {
-		return err // Task not found
+		return err
 	}
-
-	switch meta.Status {
-	case "downloading":
-		return fmt.Errorf("cannot delete running task, please stop it first")
-	case "deleting":
+	if meta.Status == TaskStatusDownloading || meta.Status == TaskStatusParsing {
+		return fmt.Errorf("cannot delete running task, please pause it first")
+	}
+	if meta.Status == TaskStatusDeleted {
 		return nil
 	}
-
-	if err := m.UpdateTaskStatus(id, "deleting"); err != nil {
-		return fmt.Errorf("failed to mark task as deleting: %v", err)
+	if err := m.UpdateTaskStatus(id, TaskStatusDeleted); err != nil {
+		return err
 	}
-
 	go m.deleteTaskAsync(*meta)
-
 	return nil
 }
 
@@ -144,15 +265,11 @@ func (m *Manager) deleteTaskAsync(meta TaskMetadata) {
 	defer m.releaseDeleteSlot()
 
 	start := time.Now()
-	fmt.Printf("Delete task %s: started (previous_status=%s)\n", meta.ID, meta.Status)
-
 	if err := m.deleteTaskResources(meta.ID); err != nil {
-		fmt.Printf("Delete task %s: failed after %s: %v\n", meta.ID, time.Since(start), err)
-		_ = m.UpdateTaskStatus(meta.ID, "delete_failed")
+		log.Printf("Delete task %s failed after %s: %v", meta.ID, time.Since(start), err)
 		return
 	}
-
-	fmt.Printf("Delete task %s: completed in %s\n", meta.ID, time.Since(start))
+	log.Printf("Delete task %s completed in %s", meta.ID, time.Since(start))
 }
 
 func (m *Manager) acquireDeleteSlot() {
@@ -180,56 +297,28 @@ func (m *Manager) deleteTaskResources(id string) error {
 		return fmt.Errorf("failed to prepare delete paths: %v", err)
 	}
 
-	rpcStart := time.Now()
-	aria2Mode := "disabled"
-	aria2Touched := 0
 	if m.aria2 != nil {
 		dir := cache.GetTaskDir(id)
-		removed, err := m.aria2.ForceRemoveTaskDownloads(dir)
-		if err != nil {
-			aria2Mode = "gid_fallback"
-			if len(gids) > 0 {
-				m.aria2.CleanupTaskDownloads(gids)
-				aria2Touched = len(gids)
-			}
+		if _, err := m.aria2.ForceRemoveTaskDownloads(dir); err != nil && len(gids) > 0 {
+			m.aria2.CleanupTaskDownloads(gids)
 		} else {
-			aria2Mode = "queue_only+purge"
-			aria2Touched = removed
-			if err := m.aria2.PurgeDownloadResult(); err != nil && len(gids) > 0 {
-				aria2Mode = "queue_only+gid_result_fallback"
-				m.aria2.CleanupTaskDownloads(gids)
-				aria2Touched = len(gids)
-			}
+			_ = m.aria2.PurgeDownloadResult()
 		}
 	}
-	fmt.Printf("Delete task %s: aria2 cleanup finished in %s (%s, %d gids)\n", id, time.Since(rpcStart), aria2Mode, aria2Touched)
 
-	fsStart := time.Now()
 	for _, path := range paths {
 		if err := os.RemoveAll(path); err != nil {
 			return fmt.Errorf("failed to remove files at %s: %v", path, err)
 		}
-		if _, err := os.Stat(path); !os.IsNotExist(err) {
-			return fmt.Errorf("directory still exists: %s", path)
-		}
 	}
-	fmt.Printf("Delete task %s: file cleanup finished in %s (%d paths)\n", id, time.Since(fsStart), len(paths))
-
-	dbStart := time.Now()
 	if err := m.DeleteTaskItems(id); err != nil {
-		return fmt.Errorf("failed to delete task items: %v", err)
+		return err
 	}
-	if err := m.DeleteTaskDB(id); err != nil {
-		return fmt.Errorf("failed to delete from db: %v", err)
-	}
-	fmt.Printf("Delete task %s: db cleanup finished in %s\n", id, time.Since(dbStart))
-
-	return nil
+	return m.DeleteTaskDB(id)
 }
 
 func (m *Manager) prepareTaskDeletionPaths(id string) ([]string, error) {
 	paths := make([]string, 0, 2)
-
 	dir := cache.GetTaskDir(id)
 	if info, err := os.Stat(dir); err == nil && info.IsDir() {
 		detachedDir, detachErr := detachTaskDir(id)
@@ -246,7 +335,6 @@ func (m *Manager) prepareTaskDeletionPaths(id string) ([]string, error) {
 		return nil, err
 	}
 	paths = append(paths, stalePaths...)
-
 	return uniquePaths(paths), nil
 }
 
@@ -256,7 +344,6 @@ func detachTaskDir(taskID string) (string, error) {
 	if err := os.MkdirAll(trashRoot, 0755); err != nil {
 		return "", err
 	}
-
 	detachedDir := filepath.Join(trashRoot, fmt.Sprintf("%s-%d", taskID, time.Now().UnixNano()))
 	if err := os.Rename(dir, detachedDir); err != nil {
 		return "", err
@@ -274,14 +361,10 @@ func findDetachedTaskDirs(taskID string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-
 	prefix := taskID + "-"
-	paths := make([]string, 0)
+	var paths []string
 	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-		if strings.HasPrefix(entry.Name(), prefix) {
+		if entry.IsDir() && strings.HasPrefix(entry.Name(), prefix) {
 			paths = append(paths, filepath.Join(trashRoot, entry.Name()))
 		}
 	}
@@ -292,122 +375,215 @@ func uniquePaths(paths []string) []string {
 	if len(paths) == 0 {
 		return nil
 	}
-
 	out := make([]string, 0, len(paths))
 	seen := make(map[string]struct{}, len(paths))
-	for _, path := range paths {
-		if path == "" {
+	for _, current := range paths {
+		if current == "" {
 			continue
 		}
-		if _, ok := seen[path]; ok {
+		if _, ok := seen[current]; ok {
 			continue
 		}
-		seen[path] = struct{}{}
-		out = append(out, path)
+		seen[current] = struct{}{}
+		out = append(out, current)
 	}
 	return out
 }
 
-// API Handlers
-func (m *Manager) HandleList(w http.ResponseWriter, r *http.Request) {
+func (m *Manager) HandleLegacyList(w http.ResponseWriter, r *http.Request) {
 	tasks, err := m.GetTasks()
 	if err != nil {
-		http.Error(w, err.Error(), 500)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(tasks)
 }
 
-func (m *Manager) HandleStop(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-	if id == "" {
-		http.Error(w, "Invalid ID", 400)
+func (m *Manager) HandleListV1(w http.ResponseWriter, r *http.Request) {
+	tasks, err := m.GetTasks()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	if err := m.StopTask(id); err != nil {
-		http.Error(w, err.Error(), 500)
-		return
+	status := strings.TrimSpace(r.URL.Query().Get("status"))
+	if status != "" {
+		filtered := tasks[:0]
+		for _, item := range tasks {
+			if item.Status == status {
+				filtered = append(filtered, item)
+			}
+		}
+		tasks = filtered
 	}
-	w.WriteHeader(200)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"total": len(tasks),
+		"items": tasks,
+	})
 }
 
-func (m *Manager) HandleDelete(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-	if id == "" {
-		http.Error(w, "Invalid ID", 400)
+func (m *Manager) HandleGetTaskV1(w http.ResponseWriter, r *http.Request) {
+	taskID := r.PathValue("id")
+	detail, err := m.GetTaskDetail(taskID)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			http.Error(w, "task not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	if err := m.DeleteTask(id); err != nil {
-		http.Error(w, err.Error(), 500)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(detail)
+}
+
+func (m *Manager) HandleListTaskItemsV1(w http.ResponseWriter, r *http.Request) {
+	taskID := r.PathValue("id")
+	status := strings.TrimSpace(r.URL.Query().Get("status"))
+	items, err := m.ListTaskItemsByTask(taskID, status)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	w.WriteHeader(200)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"total": len(items),
+		"items": items,
+	})
+}
+
+func (m *Manager) HandleGetTaskItemV1(w http.ResponseWriter, r *http.Request) {
+	taskID := r.PathValue("id")
+	itemID, err := strconv.ParseInt(r.PathValue("itemId"), 10, 64)
+	if err != nil {
+		http.Error(w, "invalid item id", http.StatusBadRequest)
+		return
+	}
+	item, err := m.GetTaskItem(taskID, itemID)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			http.Error(w, "task item not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(item)
+}
+
+func (m *Manager) HandlePauseV1(w http.ResponseWriter, r *http.Request) {
+	taskID := r.PathValue("id")
+	paused, err := m.PauseTask(taskID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"paused_items": paused})
+}
+
+func (m *Manager) HandleResumeV1(w http.ResponseWriter, r *http.Request, onResume func(string)) {
+	taskID := r.PathValue("id")
+	resumed, err := m.ResumeTask(taskID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+	if onResume != nil {
+		onResume(taskID)
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"resumed_items": resumed})
+}
+
+func (m *Manager) HandleRetryV1(w http.ResponseWriter, r *http.Request, onResume func(string)) {
+	taskID := r.PathValue("id")
+	var body RetryTaskRequest
+	if r.Body != nil {
+		_ = json.NewDecoder(r.Body).Decode(&body)
+	}
+	retried, err := m.RetryTask(taskID, body.ItemIDs)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+	if onResume != nil && retried > 0 {
+		onResume(taskID)
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"retried_items": retried})
+}
+
+func (m *Manager) HandleDeleteV1(w http.ResponseWriter, r *http.Request) {
+	taskID := r.PathValue("id")
+	if err := m.DeleteTask(taskID); err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (m *Manager) HandleAdd(w http.ResponseWriter, r *http.Request, triggerFunc func(AddTaskRequest) error) {
 	if !strings.Contains(r.Header.Get("Content-Type"), "application/json") {
-		http.Error(w, "Content-Type must be application/json", 400)
+		http.Error(w, "Content-Type must be application/json", http.StatusBadRequest)
 		return
 	}
-
 	var body AddTaskRequest
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&body); err != nil {
-		http.Error(w, err.Error(), 400)
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-
 	var extra struct{}
 	if err := decoder.Decode(&extra); err != io.EOF {
-		http.Error(w, "Request body must contain a single JSON object", 400)
+		http.Error(w, "Request body must contain a single JSON object", http.StatusBadRequest)
 		return
 	}
 
 	body.Name = strings.TrimSpace(body.Name)
 	body.URL = strings.TrimSpace(body.URL)
 	if body.URL == "" {
-		http.Error(w, "url is required", 400)
+		http.Error(w, "url is required", http.StatusBadRequest)
 		return
 	}
 	if body.Name == "" {
-		http.Error(w, "name is required", 400)
-		return
+		body.Name = DeriveTaskName(body.URL)
 	}
 
-	// Validate URL
 	parsedURL, err := url.Parse(body.URL)
 	if err != nil || parsedURL.Scheme == "" || parsedURL.Host == "" {
-		http.Error(w, "Invalid URL", 400)
+		http.Error(w, "Invalid URL", http.StatusBadRequest)
 		return
 	}
 
-	// Check if task exists
 	taskID := cache.GetTaskID(body.URL)
 	exists, status, err := m.CheckTaskExists(taskID)
 	if err != nil {
-		http.Error(w, "DB Error", 500)
+		http.Error(w, "DB Error", http.StatusInternalServerError)
+		return
+	}
+	if exists && status != TaskStatusDeleted {
+		http.Error(w, fmt.Sprintf("Task already exists with status: %s", status), http.StatusConflict)
 		return
 	}
 
-	if exists {
-		if status == "deleting" { // Legacy check just in case
-			http.Error(w, "Task is currently being deleted, please try again later", 409)
-			return
-		}
-		// If task exists in any active/stopped state, reject
-		http.Error(w, fmt.Sprintf("Task already exists with status: %s", status), 409)
-		return
-	}
-
-	// Trigger the download asynchronously
 	go func() {
 		if err := triggerFunc(body); err != nil {
-			fmt.Printf("Error starting task %s: %v\n", body.URL, err)
+			log.Printf("Error starting task %s: %v", body.URL, err)
 		}
 	}()
 
-	w.WriteHeader(200)
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"id":     taskID,
+		"name":   body.Name,
+		"url":    body.URL,
+		"status": TaskStatusPending,
+	})
 }
 
 func DeriveTaskName(rawURL string) string {
@@ -421,29 +597,23 @@ func DeriveTaskName(rawURL string) string {
 			return host
 		}
 	}
-
 	return "Untitled Task"
 }
 
-// DeleteCompletedTasks deletes all tasks with status "completed"
 func (m *Manager) DeleteCompletedTasks() error {
-	// Get all completed tasks
-	completedTasks, err := m.GetTasksByStatus("completed")
+	completedTasks, err := m.GetTasksByStatus(TaskStatusCompleted)
 	if err != nil {
-		return fmt.Errorf("failed to get completed tasks: %v", err)
+		return err
 	}
-
-	var errors []string
-	for _, task := range completedTasks {
-		if err := m.DeleteTask(task.ID); err != nil {
-			errors = append(errors, fmt.Sprintf("failed to delete task %s: %v", task.ID, err))
+	var errs []string
+	for _, current := range completedTasks {
+		if err := m.DeleteTask(current.ID); err != nil {
+			errs = append(errs, err.Error())
 		}
 	}
-
-	if len(errors) > 0 {
-		return fmt.Errorf("errors during cleanup: %v", errors)
+	if len(errs) > 0 {
+		return errors.New(strings.Join(errs, "; "))
 	}
-
 	return nil
 }
 
@@ -451,20 +621,20 @@ func (m *Manager) startProgressTracking() {
 	go m.progressNotificationWorker()
 	go m.progressDeduperCleanupLoop()
 	go m.progressNotificationLoop()
+	go m.reconcileLoop()
 }
 
 func (m *Manager) progressNotificationLoop() {
 	if m.aria2 == nil {
 		return
 	}
-
 	for {
 		err := m.aria2.ListenNotifications(context.Background(), func(method, gid string) {
-			if method != "aria2.onDownloadComplete" || gid == "" {
+			if gid == "" || method == "" {
 				return
 			}
-			if !m.enqueueProgressNotification(gid) {
-				log.Printf("progress notify dropped or deduped for gid=%s", gid)
+			if !m.enqueueProgressNotification(method, gid) {
+				return
 			}
 		})
 		if err != nil {
@@ -475,43 +645,40 @@ func (m *Manager) progressNotificationLoop() {
 }
 
 func (m *Manager) progressNotificationWorker() {
-	for gid := range m.progressNotifyCh {
-		taskID, updated, err := m.MarkTaskItemCompletedByGID(gid)
-		m.finishProgressNotification(gid)
-		if err != nil {
-			log.Printf("progress notify failed for gid=%s: %v", gid, err)
-			continue
+	for event := range m.progressNotifyCh {
+		switch event.Method {
+		case "aria2.onDownloadStart":
+			_, _, _ = m.UpdateTaskItemStateByGID(event.GID, taskItemStatusDownloading, "", "", 0)
+		case "aria2.onDownloadPause":
+			_, _, _ = m.UpdateTaskItemStateByGID(event.GID, taskItemStatusPaused, "", "", 0)
+		case "aria2.onDownloadStop":
+			_, _, _ = m.UpdateTaskItemStateByGID(event.GID, taskItemStatusPaused, "", "", 0)
+		case "aria2.onDownloadError":
+			_, _, _ = m.UpdateTaskItemStateByGID(event.GID, taskItemStatusFailed, "aria2 download error", "", 0)
+		case "aria2.onDownloadComplete":
+			_, _, _ = m.MarkTaskItemCompletedByGID(event.GID)
 		}
-		if updated {
-			log.Printf("Progress updated from aria2 notification: task=%s gid=%s", taskID, gid)
-		}
+		m.finishProgressNotification(event.GID)
 	}
 }
 
-func (m *Manager) enqueueProgressNotification(gid string) bool {
-	if gid == "" {
-		return false
-	}
-
+func (m *Manager) enqueueProgressNotification(method, gid string) bool {
 	now := time.Now()
-
 	m.progressDeduperMu.Lock()
 	if _, exists := m.progressInflight[gid]; exists {
 		m.progressDeduperMu.Unlock()
 		return false
 	}
-	if until, exists := m.progressRecent[gid]; exists {
-		if now.Before(until) {
-			m.progressDeduperMu.Unlock()
-			return false
-		}
-		delete(m.progressRecent, gid)
+	if until, exists := m.progressRecent[gid]; exists && now.Before(until) && method == "aria2.onDownloadComplete" {
+		m.progressDeduperMu.Unlock()
+		return false
 	}
+	delete(m.progressRecent, gid)
 	m.progressInflight[gid] = struct{}{}
 	m.progressDeduperMu.Unlock()
 
 	select {
-	case m.progressNotifyCh <- gid:
+	case m.progressNotifyCh <- aria2NotificationEvent{Method: method, GID: gid}:
 		return true
 	default:
 		m.finishProgressNotification(gid)
@@ -520,10 +687,6 @@ func (m *Manager) enqueueProgressNotification(gid string) bool {
 }
 
 func (m *Manager) finishProgressNotification(gid string) {
-	if gid == "" {
-		return
-	}
-
 	m.progressDeduperMu.Lock()
 	delete(m.progressInflight, gid)
 	m.progressRecent[gid] = time.Now().Add(2 * time.Minute)
@@ -533,7 +696,6 @@ func (m *Manager) finishProgressNotification(gid string) {
 func (m *Manager) progressDeduperCleanupLoop() {
 	ticker := time.NewTicker(time.Minute)
 	defer ticker.Stop()
-
 	for range ticker.C {
 		now := time.Now()
 		m.progressDeduperMu.Lock()
@@ -546,44 +708,179 @@ func (m *Manager) progressDeduperCleanupLoop() {
 	}
 }
 
-func (m *Manager) SyncTaskProgress() (int, error) {
-	tasks, err := m.GetTasksByStatuses("downloading", "stopped")
+func (m *Manager) reconcileLoop() {
+	if m.aria2 == nil {
+		return
+	}
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	for range ticker.C {
+		if updated, err := m.ReconcileActiveTaskItems(); err != nil {
+			log.Printf("reconcile task items failed: %v", err)
+		} else if updated > 0 {
+			log.Printf("reconcile updated %d task items", updated)
+		}
+	}
+}
+
+func (m *Manager) ReconcileActiveTaskItems() (int, error) {
+	items, err := m.ListActiveTaskItemsWithGID()
+	if err != nil {
+		return 0, err
+	}
+	if len(items) == 0 || m.aria2 == nil {
+		return 0, nil
+	}
+	statuses, err := m.aria2.BatchTellStatus(extractGIDs(items))
+	if err != nil {
+		return 0, err
+	}
+	updated := 0
+	for _, item := range items {
+		status, ok := statuses[item.Aria2GID]
+		if !ok {
+			continue
+		}
+		target, errMsg := mapAria2Status(status.Status)
+		filePath := status.FirstFilePath()
+		if taskID, changed, err := m.UpdateTaskItemStateByGID(item.Aria2GID, target, firstNonEmpty(status.ErrorMessage, errMsg), filePath, status.CompletedLengthInt64()); err != nil {
+			return updated, err
+		} else if changed {
+			updated++
+			_ = taskID
+		}
+	}
+	return updated, nil
+}
+
+func (m *Manager) ReconcileTaskItems(taskID string) (int, error) {
+	items, err := m.ListTaskItemsByTask(taskID, "")
+	if err != nil {
+		return 0, err
+	}
+	if len(items) == 0 || m.aria2 == nil {
+		return 0, nil
+	}
+
+	filtered := make([]TaskItem, 0, len(items))
+	for _, item := range items {
+		if item.Aria2GID == "" {
+			continue
+		}
+		switch item.Status {
+		case taskItemStatusQueued, taskItemStatusDownloading, taskItemStatusPaused, taskItemStatusSubmitting:
+			filtered = append(filtered, item)
+		}
+	}
+	if len(filtered) == 0 {
+		return 0, nil
+	}
+
+	statuses, err := m.aria2.BatchTellStatus(extractGIDs(filtered))
 	if err != nil {
 		return 0, err
 	}
 
-	updatedCount := 0
-	for _, meta := range tasks {
-		n, err := m.syncTaskItemsFromFileSet(meta.ID)
-		if err != nil {
-			return updatedCount, err
+	updated := 0
+	for _, item := range filtered {
+		status, ok := statuses[item.Aria2GID]
+		if !ok {
+			continue
 		}
-		updatedCount += n
+		target, errMsg := mapAria2Status(status.Status)
+		filePath := status.FirstFilePath()
+		if _, changed, err := m.UpdateTaskItemStateByGID(item.Aria2GID, target, firstNonEmpty(status.ErrorMessage, errMsg), filePath, status.CompletedLengthInt64()); err != nil {
+			return updated, err
+		} else if changed {
+			updated++
+		}
 	}
+	return updated, nil
+}
 
-	return updatedCount, nil
+func mapAria2Status(status string) (string, string) {
+	switch status {
+	case "active":
+		return taskItemStatusDownloading, ""
+	case "waiting":
+		return taskItemStatusQueued, ""
+	case "paused":
+		return taskItemStatusPaused, ""
+	case "complete":
+		return taskItemStatusCompleted, ""
+	case "error":
+		return taskItemStatusFailed, "aria2 reported error"
+	case "removed":
+		return taskItemStatusRemoved, ""
+	default:
+		return taskItemStatusQueued, ""
+	}
+}
+
+func extractGIDs(items []TaskItem) []string {
+	gids := make([]string, 0, len(items))
+	for _, item := range items {
+		if item.Aria2GID != "" {
+			gids = append(gids, item.Aria2GID)
+		}
+	}
+	return gids
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func (m *Manager) SyncTaskProgress() (int, error) {
+	tasks, err := m.GetTasksByStatuses(TaskStatusDownloading, TaskStatusPaused, TaskStatusFailed)
+	if err != nil {
+		return 0, err
+	}
+	updated := 0
+	for _, meta := range tasks {
+		count, err := m.syncTaskItemsFromFileSet(meta.ID)
+		if err != nil {
+			return updated, err
+		}
+		updated += count
+	}
+	reconciled, err := m.ReconcileActiveTaskItems()
+	if err != nil {
+		return updated, err
+	}
+	return updated + reconciled, nil
 }
 
 func (m *Manager) SyncTaskProgressForTask(taskID string) (int, error) {
 	if _, err := m.GetTask(taskID); err != nil {
 		return 0, err
 	}
-	return m.syncTaskItemsFromFileSet(taskID)
+	updated, err := m.syncTaskItemsFromFileSet(taskID)
+	if err != nil {
+		return 0, err
+	}
+	reconciled, err := m.ReconcileActiveTaskItems()
+	if err != nil {
+		return updated, err
+	}
+	return updated + reconciled, nil
 }
 
-// syncTaskItemsFromFileSet checks the filesystem for task items that are
-// already downloaded but not yet marked completed in the database.
 func (m *Manager) syncTaskItemsFromFileSet(taskID string) (int, error) {
 	items, err := m.GetIncompleteTaskItems(taskID)
 	if err != nil {
-		return 0, fmt.Errorf("failed to list items for task=%s: %w", taskID, err)
+		return 0, err
 	}
 	fileSet, err := m.taskFileSet(taskID)
 	if err != nil {
-		return 0, fmt.Errorf("failed to inspect files for task=%s: %w", taskID, err)
+		return 0, err
 	}
-
-	updatedCount := 0
+	updated := 0
 	for _, item := range items {
 		if _, ok := fileSet[item.Filename]; !ok {
 			continue
@@ -592,25 +889,24 @@ func (m *Manager) syncTaskItemsFromFileSet(taskID string) (int, error) {
 			continue
 		}
 		if item.Aria2GID == "" {
-			updated, err := m.MarkTaskItemCompletedByFilename(taskID, item.Filename)
+			changed, err := m.MarkTaskItemCompletedByFilename(taskID, item.Filename)
 			if err != nil {
-				return updatedCount, fmt.Errorf("failed to sync task=%s file=%s: %w", taskID, item.Filename, err)
+				return updated, err
 			}
-			if updated {
-				updatedCount++
+			if changed {
+				updated++
 			}
 			continue
 		}
-		_, updated, err := m.MarkTaskItemCompletedByGID(item.Aria2GID)
+		_, changed, err := m.MarkTaskItemCompletedByGID(item.Aria2GID)
 		if err != nil {
-			return updatedCount, fmt.Errorf("failed to sync task=%s gid=%s: %w", taskID, item.Aria2GID, err)
+			return updated, err
 		}
-		if updated {
-			updatedCount++
+		if changed {
+			updated++
 		}
 	}
-
-	return updatedCount, nil
+	return updated, nil
 }
 
 func (m *Manager) taskFileSet(taskID string) (map[string]struct{}, error) {
@@ -621,13 +917,11 @@ func (m *Manager) taskFileSet(taskID string) (map[string]struct{}, error) {
 		}
 		return nil, err
 	}
-
 	fileSet := make(map[string]struct{}, len(entries))
 	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
+		if !entry.IsDir() {
+			fileSet[entry.Name()] = struct{}{}
 		}
-		fileSet[entry.Name()] = struct{}{}
 	}
 	return fileSet, nil
 }
@@ -635,12 +929,9 @@ func (m *Manager) taskFileSet(taskID string) (map[string]struct{}, error) {
 func (m *Manager) HandleSyncProgress(w http.ResponseWriter, r *http.Request) {
 	updated, err := m.SyncTaskProgress()
 	if err != nil {
-		http.Error(w, err.Error(), 500)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"updated": updated,
-	})
+	json.NewEncoder(w).Encode(map[string]interface{}{"updated": updated})
 }
