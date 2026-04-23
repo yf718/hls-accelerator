@@ -91,3 +91,46 @@ func TestUpdateTaskSnapshotMarksCompletion(t *testing.T) {
 		t.Fatal("finished_time should be set for completed task")
 	}
 }
+
+func TestSaveAndLoadTaskManifestIndexAndItems(t *testing.T) {
+	m := newTestManager(t)
+	manifest := TaskManifest{
+		TaskID:        "task-manifest",
+		OriginalURL:   "https://example.com/test.m3u8",
+		TotalSegments: 1,
+		Items: []ManifestItem{
+			{Filename: "enc.key", URL: "https://example.com/enc.key", Type: "key"},
+			{Filename: "00001.ts", URL: "https://example.com/00001.ts", Type: "segment"},
+		},
+	}
+
+	if err := m.SaveTaskManifest(manifest); err != nil {
+		t.Fatalf("SaveTaskManifest: %v", err)
+	}
+
+	indexItems, err := m.LoadTaskManifestIndex(manifest.TaskID)
+	if err != nil {
+		t.Fatalf("LoadTaskManifestIndex: %v", err)
+	}
+	if len(indexItems) != 2 {
+		t.Fatalf("len(indexItems) = %d, want 2", len(indexItems))
+	}
+	if indexItems[0].Filename != "enc.key" || indexItems[0].IsSegment {
+		t.Fatalf("unexpected first index item: %#v", indexItems[0])
+	}
+	if indexItems[1].Filename != "00001.ts" || !indexItems[1].IsSegment {
+		t.Fatalf("unexpected second index item: %#v", indexItems[1])
+	}
+
+	itemsByFilename, err := m.LoadManifestItemsByFilenames(manifest.TaskID, []string{"00001.ts"})
+	if err != nil {
+		t.Fatalf("LoadManifestItemsByFilenames: %v", err)
+	}
+	item, ok := itemsByFilename["00001.ts"]
+	if !ok {
+		t.Fatal("expected to load manifest item 00001.ts")
+	}
+	if item.URL != "https://example.com/00001.ts" {
+		t.Fatalf("item url = %q, want %q", item.URL, "https://example.com/00001.ts")
+	}
+}

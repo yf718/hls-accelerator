@@ -36,7 +36,17 @@ func (m *Manager) InitTable() error {
 		proxied_content TEXT NOT NULL DEFAULT ''
 	);
 
+	CREATE TABLE IF NOT EXISTS task_manifest (
+		task_id TEXT NOT NULL,
+		seq INTEGER NOT NULL,
+		filename TEXT NOT NULL,
+		url TEXT NOT NULL DEFAULT '',
+		item_type TEXT NOT NULL DEFAULT 'segment',
+		PRIMARY KEY (task_id, filename)
+	);
+
 	CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
+	CREATE INDEX IF NOT EXISTS idx_task_manifest_task_seq ON task_manifest(task_id, seq);
 	`
 	_, err := m.db.Exec(query)
 	return err
@@ -190,9 +200,154 @@ func (m *Manager) ListTasksDB() ([]TaskMetadata, error) {
 	return tasks, rows.Err()
 }
 
+func (m *Manager) SaveTaskManifest(manifest TaskManifest) error {
+	tx, err := m.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+
+	if _, err = tx.Exec(`DELETE FROM task_manifest WHERE task_id = ?`, manifest.TaskID); err != nil {
+		return err
+	}
+
+	stmt, err := tx.Prepare(`
+	INSERT INTO task_manifest (task_id, seq, filename, url, item_type)
+	VALUES (?, ?, ?, ?, ?)
+	`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+
+	for index, item := range manifest.Items {
+		if _, err = stmt.Exec(manifest.TaskID, index, item.Filename, item.URL, normalizeManifestType(item.Type)); err != nil {
+			return err
+		}
+	}
+
+	return tx.Commit()
+}
+
+func (m *Manager) LoadTaskManifest(taskID, originalURL string, totalSegments int) (TaskManifest, error) {
+	rows, err := m.db.Query(`
+	SELECT filename, url, item_type
+	FROM task_manifest
+	WHERE task_id = ?
+	ORDER BY seq ASC
+	`, taskID)
+	if err != nil {
+		return TaskManifest{}, err
+	}
+	defer rows.Close()
+
+	items := make([]ManifestItem, 0)
+	for rows.Next() {
+		var item ManifestItem
+		if err := rows.Scan(&item.Filename, &item.URL, &item.Type); err != nil {
+			return TaskManifest{}, err
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return TaskManifest{}, err
+	}
+
+	return TaskManifest{
+		TaskID:        taskID,
+		OriginalURL:   originalURL,
+		TotalSegments: totalSegments,
+		Items:         items,
+	}, nil
+}
+
+func (m *Manager) LoadTaskManifestIndex(taskID string) ([]ManifestIndexItem, error) {
+	rows, err := m.db.Query(`
+	SELECT seq, filename, item_type
+	FROM task_manifest
+	WHERE task_id = ?
+	ORDER BY seq ASC
+	`, taskID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make([]ManifestIndexItem, 0)
+	for rows.Next() {
+		var (
+			seq      uint32
+			filename string
+			itemType string
+		)
+		if err := rows.Scan(&seq, &filename, &itemType); err != nil {
+			return nil, err
+		}
+		out = append(out, ManifestIndexItem{
+			Seq:       seq,
+			Filename:  filename,
+			IsSegment: normalizeManifestType(itemType) != "key",
+		})
+	}
+	return out, rows.Err()
+}
+
+func (m *Manager) LoadManifestItemsByFilenames(taskID string, filenames []string) (map[string]ManifestItem, error) {
+	if len(filenames) == 0 {
+		return map[string]ManifestItem{}, nil
+	}
+	placeholders := make([]string, 0, len(filenames))
+	args := make([]interface{}, 0, len(filenames)+1)
+	args = append(args, taskID)
+	for _, filename := range filenames {
+		placeholders = append(placeholders, "?")
+		args = append(args, filename)
+	}
+
+	rows, err := m.db.Query(fmt.Sprintf(`
+	SELECT filename, url, item_type
+	FROM task_manifest
+	WHERE task_id = ? AND filename IN (%s)
+	`, strings.Join(placeholders, ",")), args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make(map[string]ManifestItem, len(filenames))
+	for rows.Next() {
+		var item ManifestItem
+		if err := rows.Scan(&item.Filename, &item.URL, &item.Type); err != nil {
+			return nil, err
+		}
+		item.Type = normalizeManifestType(item.Type)
+		out[item.Filename] = item
+	}
+	return out, rows.Err()
+}
+
 func (m *Manager) DeleteTaskDB(id string) error {
-	_, err := m.db.Exec(`DELETE FROM tasks WHERE id = ?`, id)
-	return err
+	tx, err := m.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+
+	if _, err = tx.Exec(`DELETE FROM task_manifest WHERE task_id = ?`, id); err != nil {
+		return err
+	}
+	if _, err = tx.Exec(`DELETE FROM tasks WHERE id = ?`, id); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (m *Manager) CheckTaskExists(id string) (bool, string, error) {

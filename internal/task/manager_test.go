@@ -34,16 +34,10 @@ func TestBuildManifestDeduplicatesByFilenameAndPreservesLastEntry(t *testing.T) 
 }
 
 func TestTaskRuntimeSnapshotCountsKeysOutsideSegmentProgress(t *testing.T) {
-	manifest := TaskManifest{
-		TaskID:        "task-runtime",
-		TotalSegments: 1,
-		Items: []ManifestItem{
-			{Filename: "enc.key", Type: "key"},
-			{Filename: "00001.ts", Type: "segment"},
-		},
-	}
-	progress := buildInitialProgress(manifest)
-	rt := newTaskRuntime(manifest, progress, false)
+	rt := newTaskRuntime("task-runtime", 2, 1, []ManifestIndexItem{
+		{Seq: 0, Filename: "enc.key", IsSegment: false},
+		{Seq: 1, Filename: "00001.ts", IsSegment: true},
+	}, TaskProgressFile{TaskID: "task-runtime", Failed: []string{}}, false)
 
 	if !rt.markCompleted("enc.key") {
 		t.Fatal("expected key completion to change runtime state")
@@ -207,15 +201,10 @@ func TestCleanupInactiveRuntimesEvictsPausedButKeepsDownloading(t *testing.T) {
 }
 
 func TestProgressSnapshotUsesCompactFailedOnlyFormat(t *testing.T) {
-	manifest := TaskManifest{
-		TaskID:        "task-progress",
-		TotalSegments: 2,
-		Items: []ManifestItem{
-			{Filename: "00001.ts", Type: "segment"},
-			{Filename: "00002.ts", Type: "segment"},
-		},
-	}
-	rt := newTaskRuntime(manifest, buildInitialProgress(manifest), false)
+	rt := newTaskRuntime("task-progress", 2, 2, []ManifestIndexItem{
+		{Seq: 0, Filename: "00001.ts", IsSegment: true},
+		{Seq: 1, Filename: "00002.ts", IsSegment: true},
+	}, TaskProgressFile{TaskID: "task-progress", Failed: []string{}}, false)
 
 	if !rt.markCompleted("00001.ts") {
 		t.Fatal("expected first item to complete")
@@ -225,8 +214,8 @@ func TestProgressSnapshotUsesCompactFailedOnlyFormat(t *testing.T) {
 	}
 
 	progress, snapshot := rt.snapshot()
-	if progress.TaskID != manifest.TaskID {
-		t.Fatalf("task id = %q, want %q", progress.TaskID, manifest.TaskID)
+	if progress.TaskID != "task-progress" {
+		t.Fatalf("task id = %q, want %q", progress.TaskID, "task-progress")
 	}
 	if len(progress.Failed) != 1 || progress.Failed[0] != "00002.ts" {
 		t.Fatalf("failed list = %#v, want only failed item name", progress.Failed)
@@ -243,21 +232,19 @@ func TestProgressSnapshotUsesCompactFailedOnlyFormat(t *testing.T) {
 }
 
 func TestNewTaskRuntimeStoresRemainingAsManifestIndexes(t *testing.T) {
-	manifest := TaskManifest{
-		TaskID: "task-index-map",
-		Items: []ManifestItem{
-			{Filename: "00001.ts", URL: "https://example.com/1.ts", Type: "segment"},
-			{Filename: "00002.ts", URL: "https://example.com/2.ts", Type: "segment"},
-		},
-	}
-
-	rt := newTaskRuntime(manifest, buildInitialProgress(manifest), false)
+	rt := newTaskRuntime("task-index-map", 2, 2, []ManifestIndexItem{
+		{Seq: 0, Filename: "00001.ts", IsSegment: true},
+		{Seq: 1, Filename: "00002.ts", IsSegment: true},
+	}, TaskProgressFile{TaskID: "task-index-map", Failed: []string{}}, false)
 
 	index, ok := rt.remaining["00002.ts"]
 	if !ok {
 		t.Fatal("expected remaining entry for 00002.ts")
 	}
-	if got := rt.manifest.Items[index].URL; got != "https://example.com/2.ts" {
-		t.Fatalf("manifest lookup url = %q, want %q", got, "https://example.com/2.ts")
+	if index != 1 {
+		t.Fatalf("remaining index = %d, want 1", index)
+	}
+	if !rt.isSegment(index) {
+		t.Fatal("expected sequence 1 to be marked as segment")
 	}
 }

@@ -52,7 +52,10 @@ type aria2NotificationEvent struct {
 
 type taskRuntime struct {
 	mu                sync.Mutex
-	manifest          TaskManifest
+	taskID            string
+	totalItems        int
+	totalSegments     int
+	segmentBySeq      []bool
 	remaining         map[string]uint32
 	failed            map[string]struct{}
 	dispatching       map[string]struct{}
@@ -308,13 +311,27 @@ func (m *Manager) dispatchTask(ctx context.Context, taskID string) {
 		default:
 		}
 
-		items := rt.claimPending(batchSize)
-		if len(items) == 0 {
+		filenames := rt.claimPending(batchSize)
+		if len(filenames) == 0 {
 			return
 		}
 
-		requests := make([]downloader.AddURIRequest, 0, len(items))
-		for _, item := range items {
+		itemsByFilename, err := m.LoadManifestItemsByFilenames(taskID, filenames)
+		if err != nil {
+			log.Printf("load manifest items failed task=%s: %v", taskID, err)
+			for _, filename := range filenames {
+				m.markFailedByFilename(taskID, filename, "load manifest items failed")
+			}
+			return
+		}
+
+		requests := make([]downloader.AddURIRequest, 0, len(filenames))
+		for _, filename := range filenames {
+			item, ok := itemsByFilename[filename]
+			if !ok {
+				m.markFailedByFilename(taskID, filename, "manifest item not found")
+				continue
+			}
 			if cache.FileExists(taskID, item.Filename) && !cache.FileExists(taskID, item.Filename+".aria2") {
 				m.markCompletedByFilename(taskID, item.Filename)
 				continue
@@ -516,9 +533,9 @@ func (m *Manager) ReconcileTask(taskID string) (int, error) {
 	}
 	updated := 0
 
-	for _, item := range rt.remainingItemsSnapshot() {
-		if cache.FileExists(taskID, item.Filename) && !cache.FileExists(taskID, item.Filename+".aria2") {
-			if m.markCompletedByFilename(taskID, item.Filename) {
+	for _, filename := range rt.remainingFilenamesSnapshot() {
+		if cache.FileExists(taskID, filename) && !cache.FileExists(taskID, filename+".aria2") {
+			if m.markCompletedByFilename(taskID, filename) {
 				updated++
 			}
 		}
@@ -566,16 +583,16 @@ func (m *Manager) loadRuntime(taskID string) (*taskRuntime, error) {
 	if err != nil {
 		return nil, err
 	}
-	manifest, err := m.LoadTaskManifest(taskID, meta.OriginalURL, meta.TotalSegments)
+	manifestIndex, err := m.LoadTaskManifestIndex(taskID)
 	if err != nil {
 		return nil, err
 	}
-	progress, err := readProgress(taskProgressPath(taskID), manifest)
+	progress, err := readProgress(taskProgressPath(taskID), taskID)
 	if err != nil {
 		return nil, err
 	}
 
-	rt := newTaskRuntime(manifest, progress, meta.Status == TaskStatusPaused)
+	rt := newTaskRuntime(taskID, meta.TotalItems, meta.TotalSegments, manifestIndex, progress, meta.Status == TaskStatusPaused)
 	rt.syncCompletedFiles(taskID)
 
 	m.runtimeMu.Lock()
@@ -830,17 +847,28 @@ func buildInitialProgress(manifest TaskManifest) TaskProgressFile {
 	}
 }
 
-func newTaskRuntime(manifest TaskManifest, progress TaskProgressFile, paused bool) *taskRuntime {
-	remaining := make(map[string]uint32, len(manifest.Items))
+func newTaskRuntime(taskID string, totalItems, totalSegments int, manifestIndex []ManifestIndexItem, progress TaskProgressFile, paused bool) *taskRuntime {
+	remaining := make(map[string]uint32, len(manifestIndex))
+	var maxSeq uint32
+	for _, item := range manifestIndex {
+		if item.Seq > maxSeq {
+			maxSeq = item.Seq
+		}
+	}
+	segmentBySeq := make([]bool, int(maxSeq)+1)
 	remainingSegments := 0
-	for idx, item := range manifest.Items {
-		remaining[item.Filename] = uint32(idx)
-		if item.Type != "key" {
+	for _, item := range manifestIndex {
+		remaining[item.Filename] = item.Seq
+		if item.IsSegment {
+			segmentBySeq[item.Seq] = true
 			remainingSegments++
 		}
 	}
 	return &taskRuntime{
-		manifest:          manifest,
+		taskID:            taskID,
+		totalItems:        totalItems,
+		totalSegments:     totalSegments,
+		segmentBySeq:      segmentBySeq,
 		remaining:         remaining,
 		failed:            failedSet(progress.Failed),
 		dispatching:       make(map[string]struct{}),
@@ -862,8 +890,7 @@ func (rt *taskRuntime) syncCompletedFiles(taskID string) {
 		if cache.FileExists(taskID, filename) && !cache.FileExists(taskID, filename+".aria2") {
 			delete(rt.remaining, filename)
 			delete(rt.failed, filename)
-			item := rt.manifest.Items[index]
-			if item.Type != "key" && rt.remainingSegments > 0 {
+			if rt.isSegment(index) && rt.remainingSegments > 0 {
 				rt.remainingSegments--
 			}
 			rt.markDirtyLocked()
@@ -871,15 +898,15 @@ func (rt *taskRuntime) syncCompletedFiles(taskID string) {
 	}
 }
 
-func (rt *taskRuntime) claimPending(limit int) []ManifestItem {
+func (rt *taskRuntime) claimPending(limit int) []string {
 	rt.mu.Lock()
 	defer rt.mu.Unlock()
 	rt.lastAccessAt = time.Now()
 	if rt.paused {
 		return nil
 	}
-	items := make([]ManifestItem, 0, limit)
-	for filename, index := range rt.remaining {
+	items := make([]string, 0, limit)
+	for filename := range rt.remaining {
 		if len(items) >= limit {
 			break
 		}
@@ -893,7 +920,7 @@ func (rt *taskRuntime) claimPending(limit int) []ManifestItem {
 			continue
 		}
 		rt.dispatching[filename] = struct{}{}
-		items = append(items, rt.manifest.Items[index])
+		items = append(items, filename)
 	}
 	return items
 }
@@ -935,8 +962,7 @@ func (rt *taskRuntime) markCompleted(filename string) bool {
 		delete(rt.fileToGID, filename)
 		delete(rt.gidToFile, gid)
 	}
-	item := rt.manifest.Items[index]
-	if item.Type != "key" && rt.remainingSegments > 0 {
+	if rt.isSegment(index) && rt.remainingSegments > 0 {
 		rt.remainingSegments--
 	}
 	rt.markDirtyLocked()
@@ -977,12 +1003,12 @@ func (rt *taskRuntime) pendingDispatchableCountLocked() int {
 	return count
 }
 
-func (rt *taskRuntime) remainingItemsSnapshot() []ManifestItem {
+func (rt *taskRuntime) remainingFilenamesSnapshot() []string {
 	rt.mu.Lock()
 	defer rt.mu.Unlock()
-	items := make([]ManifestItem, 0, len(rt.remaining))
-	for _, index := range rt.remaining {
-		items = append(items, rt.manifest.Items[index])
+	items := make([]string, 0, len(rt.remaining))
+	for filename := range rt.remaining {
+		items = append(items, filename)
 	}
 	return items
 }
@@ -999,8 +1025,8 @@ func (rt *taskRuntime) snapshot() (TaskProgressFile, runtimeSnapshot) {
 	defer rt.mu.Unlock()
 	rt.lastAccessAt = time.Now()
 
-	doneItems := len(rt.manifest.Items) - len(rt.remaining)
-	downloadedSegments := rt.manifest.TotalSegments - rt.remainingSegments
+	doneItems := rt.totalItems - len(rt.remaining)
+	downloadedSegments := rt.totalSegments - rt.remainingSegments
 	failedItems := len(rt.failed)
 	status := TaskStatusDownloading
 	switch {
@@ -1013,7 +1039,7 @@ func (rt *taskRuntime) snapshot() (TaskProgressFile, runtimeSnapshot) {
 	}
 
 	progress := TaskProgressFile{
-		TaskID:             rt.manifest.TaskID,
+		TaskID:             rt.taskID,
 		Failed:             failedNames(rt.failed),
 		DownloadedSegments: downloadedSegments,
 		DoneItems:          doneItems,
@@ -1084,15 +1110,22 @@ func (rt *taskRuntime) markDirtyLocked() {
 	rt.dirty = true
 }
 
+func (rt *taskRuntime) isSegment(seq uint32) bool {
+	if int(seq) >= len(rt.segmentBySeq) {
+		return false
+	}
+	return rt.segmentBySeq[seq]
+}
+
 func taskProgressPath(taskID string) string {
 	return filepath.Join(cache.GetTaskDir(taskID), "progress.json")
 }
 
-func readProgress(path string, manifest TaskManifest) (TaskProgressFile, error) {
+func readProgress(path string, taskID string) (TaskProgressFile, error) {
 	var progress TaskProgressFile
 	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
-		return buildInitialProgress(manifest), nil
+		return TaskProgressFile{TaskID: taskID, Failed: []string{}, UpdatedAt: time.Now()}, nil
 	}
 	if err != nil {
 		return progress, err

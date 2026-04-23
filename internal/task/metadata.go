@@ -42,6 +42,12 @@ type ManifestItem struct {
 	Type     string `json:"t,omitempty"`
 }
 
+type ManifestIndexItem struct {
+	Seq       uint32
+	Filename  string
+	IsSegment bool
+}
+
 type TaskProgressFile struct {
 	TaskID             string            `json:"tid"`
 	Failed             []string          `json:"f,omitempty"`
