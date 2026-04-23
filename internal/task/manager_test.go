@@ -342,3 +342,20 @@ func TestRuntimeMetricsReportsRuntimeDirtyAndFlushStats(t *testing.T) {
 		t.Fatalf("average_flush_cost_ms = %d, want 10", metrics.AverageFlushCostMs)
 	}
 }
+
+func TestNextPurgeTimeTargetsThreeAM(t *testing.T) {
+	loc := time.FixedZone("CST", 8*3600)
+	now := time.Date(2026, 4, 23, 2, 15, 0, 0, loc)
+	next := nextPurgeTime(now)
+	want := time.Date(2026, 4, 23, 3, 0, 0, 0, loc)
+	if !next.Equal(want) {
+		t.Fatalf("next purge = %v, want %v", next, want)
+	}
+
+	now = time.Date(2026, 4, 23, 3, 15, 0, 0, loc)
+	next = nextPurgeTime(now)
+	want = time.Date(2026, 4, 24, 3, 0, 0, 0, loc)
+	if !next.Equal(want) {
+		t.Fatalf("next purge after 3am = %v, want %v", next, want)
+	}
+}

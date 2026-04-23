@@ -416,6 +416,34 @@ func (c *Aria2Client) TellWaiting(offset, num int) ([]Aria2Status, error) {
 	return statuses, nil
 }
 
+func (c *Aria2Client) TellStopped(offset, num int) ([]Aria2Status, error) {
+	res, err := c.Call("aria2.tellStopped", offset, num, []string{"gid", "dir"})
+	if err != nil {
+		return nil, err
+	}
+
+	list, ok := res.([]interface{})
+	if !ok {
+		return nil, fmt.Errorf("invalid response format")
+	}
+
+	statuses := []Aria2Status{}
+	for _, item := range list {
+		m, ok := item.(map[string]interface{})
+		if ok {
+			s := Aria2Status{}
+			if v, k := m["gid"].(string); k {
+				s.Gid = v
+			}
+			if v, k := m["dir"].(string); k {
+				s.Dir = v
+			}
+			statuses = append(statuses, s)
+		}
+	}
+	return statuses, nil
+}
+
 func (c *Aria2Client) taskQueueGIDs(dir string) ([]string, error) {
 	if c == nil || dir == "" {
 		return nil, nil
@@ -452,6 +480,31 @@ func (c *Aria2Client) taskQueueGIDs(dir string) ([]string, error) {
 	return normalizeGIDs(gids), nil
 }
 
+func (c *Aria2Client) taskResultGIDs(dir string) ([]string, error) {
+	if c == nil || dir == "" {
+		return nil, nil
+	}
+
+	gids := make([]string, 0)
+	const pageSize = 1000
+	for offset := 0; ; offset += pageSize {
+		stopped, err := c.TellStopped(offset, pageSize)
+		if err != nil {
+			return nil, err
+		}
+		for _, status := range stopped {
+			if status.Dir == dir {
+				gids = append(gids, status.Gid)
+			}
+		}
+		if len(stopped) < pageSize {
+			break
+		}
+	}
+
+	return normalizeGIDs(gids), nil
+}
+
 // ForceRemoveTaskDownloads removes active/waiting downloads that belong to the
 // specified task directory. Completed results are intentionally excluded because
 // they are not running anymore and can be purged in bulk when deleting.
@@ -461,6 +514,23 @@ func (c *Aria2Client) ForceRemoveTaskDownloads(dir string) (int, error) {
 		return 0, err
 	}
 	c.ForceRemoveMany(gids)
+	return len(gids), nil
+}
+
+func (c *Aria2Client) CleanupTaskByDir(dir string) (int, error) {
+	if c == nil || dir == "" {
+		return 0, nil
+	}
+	queueGIDs, err := c.taskQueueGIDs(dir)
+	if err != nil {
+		return 0, err
+	}
+	resultGIDs, err := c.taskResultGIDs(dir)
+	if err != nil {
+		return 0, err
+	}
+	gids := normalizeGIDs(append(queueGIDs, resultGIDs...))
+	c.CleanupTaskDownloads(gids)
 	return len(gids), nil
 }
 

@@ -81,16 +81,29 @@ Start Aria2 with RPC enabled. You can run it in the background or in a separate 
 
 ```bash
 # Basic RPC server (allows all origins)
-aria2c --enable-rpc --rpc-allow-origin-all
+aria2c --enable-rpc --rpc-allow-origin-all --max-download-result=2000
 
 # With RPC secret (recommended for security)
-aria2c --enable-rpc --rpc-allow-origin-all --rpc-secret=your-secret-token
+aria2c --enable-rpc --rpc-allow-origin-all --rpc-secret=your-secret-token --max-download-result=2000
 
 # With custom RPC port
-aria2c --enable-rpc --rpc-listen-port=6800 --rpc-allow-origin-all
+aria2c --enable-rpc --rpc-listen-port=6800 --rpc-allow-origin-all --max-download-result=2000
 ```
 
 **Note**: Keep this terminal/process running while using HLS Accelerator.
+
+### Aria2 Long-Running Recommendation
+
+For long-running deployments, set a reasonable `max-download-result` to avoid unbounded history growth inside aria2. A practical default is:
+
+```bash
+--max-download-result=2000
+```
+
+The current `v3` implementation also does the following automatically:
+
+- delays cleanup for `completed / failed / deleted` tasks and then clears aria2 entries by task directory
+- runs a low-frequency `purgeDownloadResult()` fallback every day at `03:00`
 
 ### Step 2: Start HLS Accelerator
 

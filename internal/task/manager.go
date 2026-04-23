@@ -29,6 +29,8 @@ const (
 	downloadingFlushInterval  = 2 * time.Second
 	pausedFlushInterval       = 400 * time.Millisecond
 	terminalFlushInterval     = 150 * time.Millisecond
+	aria2CleanupDelay         = 5 * time.Minute
+	aria2CleanupPollInterval  = time.Minute
 )
 
 type Manager struct {
@@ -48,6 +50,9 @@ type Manager struct {
 	lastFlushCost   time.Duration
 	totalFlushCost  time.Duration
 	totalFlushCount int64
+
+	cleanupMu          sync.Mutex
+	pendingAria2Cleanup map[string]time.Time
 }
 
 type aria2NotificationEvent struct {
@@ -81,6 +86,7 @@ func NewManager(aria2 *downloader.Aria2Client, db *sql.DB) (*Manager, error) {
 		progressNotifyCh: make(chan aria2NotificationEvent, 4096),
 		runtimes:         make(map[string]*taskRuntime),
 		dispatches:       make(map[string]context.CancelFunc),
+		pendingAria2Cleanup: make(map[string]time.Time),
 	}
 	if err := m.InitTable(); err != nil {
 		return nil, err
@@ -95,6 +101,8 @@ func (m *Manager) startBackgroundLoops() {
 	go m.flushDirtyLoop()
 	go m.reconcileLoop()
 	go m.cleanupRuntimeLoop()
+	go m.aria2CleanupLoop()
+	go m.dailyPurgeLoop()
 }
 
 func (m *Manager) CreateTaskWithItems(meta TaskMetadata, items []playlist.DownloadItem) (bool, error) {
@@ -312,6 +320,7 @@ func (m *Manager) DeleteTask(taskID string) error {
 	m.runtimeMu.Lock()
 	delete(m.runtimes, taskID)
 	m.runtimeMu.Unlock()
+	m.scheduleAria2Cleanup(taskID, aria2CleanupDelay)
 	go m.deleteTaskAsync(taskID)
 	return nil
 }
@@ -322,7 +331,6 @@ func (m *Manager) deleteTaskAsync(taskID string) {
 
 	if m.aria2 != nil {
 		_, _ = m.aria2.ForceRemoveTaskDownloads(cache.GetTaskDir(taskID))
-		_ = m.aria2.PurgeDownloadResult()
 	}
 	_ = os.Remove(taskProgressPath(taskID))
 	_ = os.RemoveAll(cache.GetTaskDir(taskID))
@@ -534,6 +542,69 @@ func (m *Manager) cleanupRuntimeLoop() {
 	}
 }
 
+func (m *Manager) aria2CleanupLoop() {
+	ticker := time.NewTicker(aria2CleanupPollInterval)
+	defer ticker.Stop()
+	for range ticker.C {
+		m.runDueAria2Cleanup()
+	}
+}
+
+func (m *Manager) dailyPurgeLoop() {
+	for {
+		time.Sleep(time.Until(nextPurgeTime(time.Now())))
+		if m.aria2 != nil {
+			if err := m.aria2.PurgeDownloadResult(); err != nil {
+				log.Printf("daily purge download result failed: %v", err)
+			}
+		}
+	}
+}
+
+func nextPurgeTime(now time.Time) time.Time {
+	next := time.Date(now.Year(), now.Month(), now.Day(), 3, 0, 0, 0, now.Location())
+	if !next.After(now) {
+		next = next.Add(24 * time.Hour)
+	}
+	return next
+}
+
+func (m *Manager) scheduleAria2Cleanup(taskID string, delay time.Duration) {
+	if strings.TrimSpace(taskID) == "" {
+		return
+	}
+	deadline := time.Now().Add(delay)
+	m.cleanupMu.Lock()
+	current, exists := m.pendingAria2Cleanup[taskID]
+	if !exists || deadline.Before(current) {
+		m.pendingAria2Cleanup[taskID] = deadline
+	}
+	m.cleanupMu.Unlock()
+}
+
+func (m *Manager) runDueAria2Cleanup() {
+	if m.aria2 == nil {
+		return
+	}
+	now := time.Now()
+	m.cleanupMu.Lock()
+	due := make([]string, 0)
+	for taskID, deadline := range m.pendingAria2Cleanup {
+		if !deadline.After(now) {
+			due = append(due, taskID)
+			delete(m.pendingAria2Cleanup, taskID)
+		}
+	}
+	m.cleanupMu.Unlock()
+
+	for _, taskID := range due {
+		if _, err := m.aria2.CleanupTaskByDir(cache.GetTaskDir(taskID)); err != nil {
+			log.Printf("cleanup aria2 task results failed task=%s: %v", taskID, err)
+			m.scheduleAria2Cleanup(taskID, time.Minute)
+		}
+	}
+}
+
 func (m *Manager) cleanupInactiveRuntimes() {
 	now := time.Now()
 
@@ -683,6 +754,7 @@ func (m *Manager) flushRuntime(taskID string, rt *taskRuntime) error {
 	rt.markClean()
 	switch snapshot.Status {
 	case TaskStatusCompleted, TaskStatusFailed:
+		m.scheduleAria2Cleanup(taskID, aria2CleanupDelay)
 		m.evictRuntime(taskID, rt)
 	}
 	m.recordFlushCost(time.Since(start))

@@ -187,3 +187,62 @@ func TestForceRemoveTaskDownloadsAndPurge(t *testing.T) {
 		t.Fatalf("purge count = %d, want 1", purgeCount)
 	}
 }
+
+func TestCleanupTaskByDirIncludesStoppedResults(t *testing.T) {
+	var multicallCount int
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+
+		var req JsonRpcRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+
+		resp := JsonRpcResponse{ID: req.ID}
+		switch req.Method {
+		case "aria2.tellActive":
+			resp.Result = []map[string]string{
+				{"gid": "active-1", "dir": "cache/task-a"},
+			}
+		case "aria2.tellWaiting":
+			resp.Result = []map[string]string{}
+		case "aria2.tellStopped":
+			resp.Result = []map[string]string{
+				{"gid": "stopped-1", "dir": "cache/task-a"},
+				{"gid": "stopped-2", "dir": "cache/task-b"},
+			}
+		case "system.multicall":
+			multicallCount++
+			resp.Result = []interface{}{
+				[]interface{}{"OK"},
+				[]interface{}{"OK"},
+				[]interface{}{"OK"},
+				[]interface{}{"OK"},
+			}
+		default:
+			t.Fatalf("unexpected method %s", req.Method)
+		}
+
+		if err := json.NewEncoder(w).Encode(resp); err != nil {
+			t.Fatalf("encode response: %v", err)
+		}
+	}))
+	defer srv.Close()
+
+	client := &Aria2Client{
+		RPCUrl: srv.URL,
+		Client: &http.Client{Timeout: time.Second},
+	}
+
+	cleaned, err := client.CleanupTaskByDir("cache/task-a")
+	if err != nil {
+		t.Fatalf("CleanupTaskByDir error: %v", err)
+	}
+	if cleaned != 2 {
+		t.Fatalf("CleanupTaskByDir cleaned = %d, want 2", cleaned)
+	}
+	if multicallCount != 1 {
+		t.Fatalf("system.multicall count = %d, want 1", multicallCount)
+	}
+}
