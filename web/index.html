@@ -2,226 +2,365 @@
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>HLS Download Console</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="theme-color" content="#0d9488">
+    <title>HLS 下载</title>
     <style>
         :root {
-            --bg: #f4efe6;
-            --ink: #1f2a2c;
-            --muted: #6a7475;
-            --line: rgba(31, 42, 44, 0.12);
-            --card: rgba(255, 251, 245, 0.88);
-            --primary: #0f766e;
-            --primary-soft: rgba(15, 118, 110, 0.12);
-            --warn: #b45309;
-            --danger: #b91c1c;
-            --ok: #15803d;
-            --shadow: 0 18px 48px rgba(45, 55, 72, 0.12);
+            --bg: #f3f4f6;
+            --surface: #fff;
+            --ink: #111827;
+            --muted: #6b7280;
+            --line: #e5e7eb;
+            --primary: #0d9488;
+            --primary-weak: rgba(13, 148, 136, 0.12);
+            --warn: #d97706;
+            --danger: #dc2626;
+            --ok: #16a34a;
+            --radius: 14px;
+            --radius-sm: 10px;
+            --tap: 44px;
         }
 
         * { box-sizing: border-box; }
+        html { -webkit-text-size-adjust: 100%; }
+
         body {
             margin: 0;
-            font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
+            font-family: system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+            font-size: 15px;
+            line-height: 1.45;
             color: var(--ink);
-            background:
-                radial-gradient(circle at top right, rgba(15, 118, 110, 0.14), transparent 34%),
-                radial-gradient(circle at left center, rgba(180, 83, 9, 0.12), transparent 28%),
-                linear-gradient(180deg, #f7f2ea 0%, #f2ece1 100%);
+            background: var(--bg);
+            padding:
+                max(12px, env(safe-area-inset-top))
+                max(14px, env(safe-area-inset-right))
+                max(12px, env(safe-area-inset-bottom))
+                max(14px, env(safe-area-inset-left));
         }
 
+        /* 为底部悬浮「新建任务」留出滚动到底时的可视空隙 */
         .shell {
-            max-width: 1380px;
-            margin: 0 auto;
-            padding: 28px 20px 40px;
+            padding-bottom: calc(72px + env(safe-area-inset-bottom, 0px));
         }
 
-        .hero {
-            display: grid;
-            grid-template-columns: 1.1fr 0.9fr;
-            gap: 18px;
-            margin-bottom: 18px;
-        }
-
-        .hero-card, .panel, .task-card, .drawer-panel {
-            background: var(--card);
-            backdrop-filter: blur(14px);
-            border: 1px solid var(--line);
-            border-radius: 24px;
-            box-shadow: var(--shadow);
-        }
-
-        .hero-card {
-            padding: 28px;
-        }
-
-        .hero-card,
-        .panel,
-        .task-card {
-            overflow: hidden;
-        }
-
-        .eyebrow {
-            display: inline-flex;
-            padding: 6px 12px;
-            border-radius: 999px;
-            background: rgba(255,255,255,0.65);
-            border: 1px solid var(--line);
-            font-size: 12px;
-            letter-spacing: 0.08em;
-            text-transform: uppercase;
-            color: var(--muted);
-        }
-
-        h1 {
-            margin: 14px 0 10px;
-            font-size: clamp(30px, 4vw, 46px);
-            line-height: 1.05;
-        }
-
-        .hero-copy {
-            margin: 0;
-            color: var(--muted);
-            line-height: 1.7;
-        }
-
-        .stat-grid {
-            display: grid;
-            grid-template-columns: repeat(3, minmax(0, 1fr));
+        .top {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
             gap: 12px;
-            margin-top: 22px;
+            margin-bottom: 14px;
         }
 
-        .stat {
-            padding: 16px;
-            border-radius: 18px;
-            background: rgba(255,255,255,0.6);
+        .top h1 {
+            margin: 0;
+            font-size: 1.25rem;
+            font-weight: 700;
+            letter-spacing: -0.02em;
+        }
+
+        .top-actions {
+            display: flex;
+            gap: 8px;
+            flex-shrink: 0;
+        }
+
+        .icon-btn {
+            min-width: var(--tap);
+            min-height: var(--tap);
+            padding: 0 12px;
+            border-radius: var(--radius-sm);
+            border: 1px solid var(--line);
+            background: var(--surface);
+            color: var(--ink);
+            font-size: 13px;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .icon-btn:active { opacity: 0.85; }
+        .icon-btn:disabled { opacity: 0.45; }
+
+        .stats {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 14px;
+            overflow-x: auto;
+            -webkit-overflow-scrolling: touch;
+            padding-bottom: 2px;
+        }
+
+        .stats::-webkit-scrollbar { display: none; }
+
+        .metrics-rail {
+            font-size: 11px;
+            color: var(--muted);
+            background: rgba(255, 255, 255, 0.65);
+            border: 1px solid var(--line);
+            border-radius: var(--radius-sm);
+            padding: 6px 8px 7px;
+            margin-bottom: 8px;
+        }
+
+        .metrics-rail-items {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px 12px;
+        }
+
+        .metric-item {
+            display: flex;
+            flex-direction: column;
+            gap: 0;
+            min-width: 0;
+        }
+
+        .metric-item .metric-k {
+            font-size: 10px;
+            color: var(--muted);
+            white-space: nowrap;
+            line-height: 1.25;
+        }
+
+        .metric-item .metric-v {
+            font-size: 12px;
+            font-weight: 700;
+            color: var(--ink);
+            font-variant-numeric: tabular-nums;
+            font-family: ui-monospace, "Cascadia Code", "Consolas", monospace;
+            line-height: 1.2;
+        }
+
+        .stat-pill {
+            flex: 1 1 0;
+            min-width: 88px;
+            padding: 10px 12px;
+            border-radius: var(--radius-sm);
+            background: var(--surface);
             border: 1px solid var(--line);
         }
 
-        .stat-value { font-size: 28px; font-weight: 700; }
-        .stat-label { font-size: 13px; color: var(--muted); margin-top: 6px; }
-
-        .panel {
-            padding: 24px;
+        .stat-pill b {
+            display: block;
+            font-size: 1.15rem;
+            line-height: 1.2;
         }
 
-        .panel h2, .drawer-panel h2 {
-            margin: 0 0 16px;
-            font-size: 20px;
+        .stat-pill span {
+            font-size: 12px;
+            color: var(--muted);
         }
 
-        .form-grid {
-            display: grid;
-            gap: 14px;
+        .card {
+            background: var(--surface);
+            border: 1px solid var(--line);
+            border-radius: var(--radius);
+            padding: 16px;
+            margin-bottom: 12px;
         }
 
-        .form-grid .actions {
-            justify-content: flex-start;
+        .card h2 {
+            margin: 0 0 12px;
+            font-size: 16px;
+            font-weight: 600;
         }
 
         label {
             display: block;
-            margin-bottom: 8px;
-            font-size: 13px;
+            font-size: 12px;
             color: var(--muted);
+            margin-bottom: 6px;
         }
 
         input, select {
             width: 100%;
+            min-height: var(--tap);
             border: 1px solid var(--line);
-            border-radius: 16px;
-            padding: 13px 15px;
-            font-size: 14px;
-            background: rgba(255,255,255,0.82);
+            border-radius: var(--radius-sm);
+            padding: 10px 12px;
+            font-size: 16px;
+            background: #fafafa;
             color: var(--ink);
         }
 
-        .actions, .toolbar {
-            display: flex;
-            gap: 10px;
-            flex-wrap: wrap;
+        input:focus, select:focus {
+            outline: 2px solid var(--primary-weak);
+            border-color: var(--primary);
+            background: var(--surface);
         }
 
-        button, .button-link {
+        .field { margin-bottom: 12px; }
+        .field:last-of-type { margin-bottom: 0; }
+
+        .row-actions {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 8px;
+            margin-top: 12px;
+        }
+
+        .row-actions.modal-actions {
+            grid-template-columns: 1fr 1fr;
+        }
+
+        .btn {
+            min-height: var(--tap);
             border: none;
-            border-radius: 999px;
-            padding: 11px 16px;
-            font-size: 14px;
+            border-radius: var(--radius-sm);
+            padding: 0 14px;
+            font-size: 15px;
+            font-weight: 600;
             cursor: pointer;
-            transition: transform 0.15s ease, opacity 0.15s ease, background 0.15s ease;
-        }
-
-        button:hover, .button-link:hover { transform: translateY(-1px); }
-        button:disabled { opacity: 0.45; cursor: not-allowed; transform: none; }
-
-        .primary { background: var(--primary); color: #fff; }
-        .soft { background: var(--primary-soft); color: var(--primary); }
-        .warn { background: rgba(180, 83, 9, 0.12); color: var(--warn); }
-        .danger { background: rgba(185, 28, 28, 0.12); color: var(--danger); }
-        .ghost { background: rgba(255,255,255,0.7); color: var(--ink); border: 1px solid var(--line); }
-
-        .layout {
-            display: block;
-        }
-
-        .toolbar {
-            justify-content: space-between;
+            display: inline-flex;
             align-items: center;
+            justify-content: center;
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        .btn:active { transform: scale(0.98); }
+        .btn:disabled { opacity: 0.45; cursor: not-allowed; transform: none; }
+
+        .btn-primary { background: var(--primary); color: #fff; }
+        .btn-soft { background: var(--primary-weak); color: var(--primary); }
+        .btn-warn { background: rgba(217, 119, 6, 0.12); color: var(--warn); }
+        .btn-danger { background: rgba(220, 38, 38, 0.1); color: var(--danger); }
+        .btn-ghost { background: var(--surface); color: var(--ink); border: 1px solid var(--line); }
+
+        .list-head {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
             margin-bottom: 14px;
         }
 
-        .task-list {
-            display: grid;
-            gap: 14px;
+        .list-head h2 {
+            margin: 0;
+            font-size: 16px;
+            font-weight: 600;
         }
 
-        .task-card {
-            padding: 20px;
-            cursor: pointer;
-            transition: transform 0.18s ease, border-color 0.18s ease;
+        select.filter {
+            min-height: var(--tap);
         }
 
-        .task-card.active {
-            border-color: rgba(15, 118, 110, 0.28);
-            transform: translateY(-2px);
-        }
+        .task-list { display: flex; flex-direction: column; gap: 12px; }
 
-        .task-top {
+        .task {
             display: flex;
-            justify-content: space-between;
-            gap: 16px;
+            align-items: stretch;
+            gap: 0;
+            background: var(--surface);
+            border: 1px solid var(--line);
+            border-radius: var(--radius);
+            padding: 14px 0 14px 16px;
+            overflow: hidden;
+        }
+
+        .task-main {
+            flex: 1;
+            min-width: 0;
+            padding-right: 10px;
+        }
+
+        /* 右侧固定条：代理播放（整卡高度可点） */
+        .task-play-zone {
+            flex-shrink: 0;
+            width: 52px;
+            margin: -14px 0 -14px 0;
+            padding: 8px 6px;
+            align-self: stretch;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 4px;
+            border: none;
+            border-left: 1px solid var(--line);
+            background: rgba(13, 148, 136, 0.07);
+            color: var(--primary);
+            cursor: pointer;
+            font: inherit;
+            -webkit-tap-highlight-color: transparent;
+            transition: background 0.15s ease;
+        }
+
+        .task-play-zone:active {
+            background: rgba(13, 148, 136, 0.16);
+        }
+
+        .task-play-zone:focus-visible {
+            outline: 2px solid var(--primary);
+            outline-offset: -2px;
+            z-index: 1;
+        }
+
+        .task-play-icon {
+            font-size: 14px;
+            line-height: 1;
+            opacity: 0.95;
+        }
+
+        .task-play-label {
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: 0.02em;
+            line-height: 1.15;
+            text-align: center;
+        }
+
+        @media (min-width: 400px) {
+            .task-play-zone {
+                width: 60px;
+                padding: 10px 8px;
+            }
+        }
+
+        .task-hd {
+            display: flex;
             align-items: flex-start;
+            justify-content: space-between;
+            gap: 10px;
         }
 
         .task-name {
-            font-size: 18px;
-            margin: 0 0 6px;
+            margin: 0;
+            font-size: 17px;
+            font-weight: 600;
             word-break: break-word;
+            line-height: 1.3;
+        }
+
+        .badge {
+            flex-shrink: 0;
+            font-size: 11px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+            padding: 4px 8px;
+            border-radius: 999px;
+            border: 1px solid currentColor;
+            line-height: 1;
         }
 
         .task-url {
-            color: var(--muted);
+            margin-top: 6px;
             font-size: 13px;
+            color: var(--muted);
+            line-height: 1.35;
+            display: -webkit-box;
+            -webkit-line-clamp: 2;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
             word-break: break-all;
-            line-height: 1.5;
-            max-width: 100%;
-        }
-
-        .status {
-            white-space: nowrap;
-            padding: 7px 12px;
-            border-radius: 999px;
-            font-size: 12px;
-            font-weight: 700;
-            border: 1px solid currentColor;
         }
 
         .progress {
-            margin: 16px 0 10px;
-            height: 10px;
+            margin: 10px 0 6px;
+            height: 6px;
             border-radius: 999px;
-            background: rgba(31, 42, 44, 0.08);
+            background: #e5e7eb;
             overflow: hidden;
         }
 
@@ -230,53 +369,52 @@
             height: 100%;
             width: 0;
             border-radius: inherit;
-            background: linear-gradient(90deg, #0f766e, #0ea5a0);
+            background: var(--primary);
         }
 
-        .task-meta, .detail-grid, .item-row {
-            display: grid;
-            gap: 8px;
-        }
-
-        .task-meta {
-            grid-template-columns: repeat(4, minmax(0, 1fr));
-            margin-top: 12px;
-            font-size: 12px;
+        .task-sum {
+            font-size: 13px;
             color: var(--muted);
         }
 
-        .task-actions {
-            display: grid;
-            grid-template-columns: repeat(2, minmax(0, 1fr));
-            gap: 10px;
-            margin-top: 16px;
+        .task-btns {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            margin-top: 14px;
         }
 
-        .task-actions button {
-            width: 100%;
-            min-height: 42px;
-        }
+        .task-btns .btn { width: 100%; font-size: 15px; }
 
         .empty {
-            padding: 34px 20px;
             text-align: center;
             color: var(--muted);
+            font-size: 14px;
+            padding: 28px 12px;
             border: 1px dashed var(--line);
-            border-radius: 20px;
-            background: rgba(255,255,255,0.45);
+            border-radius: var(--radius);
+            background: #fafafa;
+        }
+
+        .empty-msg {
+            margin: 0;
+            line-height: 1.5;
         }
 
         .toast {
             position: fixed;
-            right: 20px;
-            bottom: 20px;
-            padding: 14px 16px;
-            background: rgba(31,42,44,0.92);
+            left: max(12px, env(safe-area-inset-left));
+            right: max(12px, env(safe-area-inset-right));
+            bottom: max(14px, env(safe-area-inset-bottom));
+            padding: 12px 14px;
+            border-radius: var(--radius-sm);
+            background: rgba(17, 24, 39, 0.92);
             color: #fff;
-            border-radius: 16px;
+            font-size: 14px;
             opacity: 0;
-            transform: translateY(12px);
-            transition: all 0.2s ease;
+            transform: translateY(10px);
+            transition: opacity 0.18s ease, transform 0.18s ease;
+            z-index: 120;
         }
 
         .toast.show {
@@ -284,174 +422,422 @@
             transform: translateY(0);
         }
 
-        @media (max-width: 1100px) {
-            .hero {
-                grid-template-columns: 1fr;
-            }
-
-            .panel {
-                padding: 20px;
-            }
+        .modal-root {
+            position: fixed;
+            inset: 0;
+            z-index: 80;
+            display: flex;
+            align-items: flex-end;
+            justify-content: center;
+            padding: 0;
+            background: rgba(17, 24, 39, 0.45);
+            opacity: 0;
+            visibility: hidden;
+            transition: opacity 0.2s ease, visibility 0.2s;
         }
 
-        @media (max-width: 720px) {
-            .shell { padding: 16px 12px 28px; }
+        .modal-root.is-open {
+            opacity: 1;
+            visibility: visible;
+        }
 
-            .hero-card,
-            .panel,
-            .task-card {
-                border-radius: 20px;
+        .modal-dialog {
+            width: 100%;
+            max-width: 520px;
+            max-height: min(88vh, 100% - env(safe-area-inset-top) - env(safe-area-inset-bottom));
+            background: var(--surface);
+            border: 1px solid var(--line);
+            border-radius: var(--radius) var(--radius) 0 0;
+            padding: 14px 14px max(14px, env(safe-area-inset-bottom));
+            box-shadow: 0 -8px 32px rgba(0, 0, 0, 0.12);
+            transform: translateY(100%);
+            transition: transform 0.22s ease;
+            overflow-y: auto;
+            -webkit-overflow-scrolling: touch;
+        }
+
+        .modal-root.is-open .modal-dialog {
+            transform: translateY(0);
+        }
+
+        .modal-head {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            margin-bottom: 14px;
+        }
+
+        .modal-head h2 {
+            margin: 0;
+            font-size: 17px;
+            font-weight: 700;
+        }
+
+        .modal-close {
+            min-width: var(--tap);
+            min-height: var(--tap);
+            margin: -6px -8px -6px 0;
+            border: none;
+            border-radius: var(--radius-sm);
+            background: transparent;
+            color: var(--muted);
+            font-size: 22px;
+            line-height: 1;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .modal-close:active { background: #f3f4f6; }
+
+        body.modal-open {
+            overflow: hidden;
+        }
+
+        /* 列表下方固定悬浮：长列表滚动时始终可点 */
+        .fab-create {
+            position: fixed;
+            z-index: 60;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            display: flex;
+            justify-content: center;
+            padding: 8px max(14px, env(safe-area-inset-left)) max(8px, env(safe-area-inset-bottom)) max(14px, env(safe-area-inset-right));
+            pointer-events: none;
+            transition: opacity 0.2s ease, transform 0.22s ease;
+        }
+
+        .fab-create-btn {
+            pointer-events: auto;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            min-height: 48px;
+            padding: 0 22px;
+            max-width: min(360px, 100%);
+            width: auto;
+            border: none;
+            border-radius: 999px;
+            background: var(--primary);
+            color: #fff;
+            font-size: 15px;
+            font-weight: 700;
+            cursor: pointer;
+            box-shadow:
+                0 4px 14px rgba(13, 148, 136, 0.35),
+                0 1px 3px rgba(0, 0, 0, 0.08);
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        .fab-create-btn:active {
+            transform: scale(0.98);
+            box-shadow: 0 2px 8px rgba(13, 148, 136, 0.28);
+        }
+
+        .fab-create-icon {
+            font-size: 22px;
+            font-weight: 400;
+            line-height: 1;
+            margin-top: -1px;
+        }
+
+        body.modal-open .fab-create {
+            opacity: 0;
+            transform: translateY(110%);
+            pointer-events: none;
+        }
+
+        /* 自定义确认框（替代 alert/confirm），高于 toast 与新建弹窗 */
+        .confirm-root {
+            position: fixed;
+            inset: 0;
+            z-index: 130;
+            display: flex;
+            align-items: flex-end;
+            justify-content: center;
+            padding: 0;
+            background: rgba(17, 24, 39, 0.5);
+            opacity: 0;
+            visibility: hidden;
+            transition: opacity 0.2s ease, visibility 0.2s;
+        }
+
+        .confirm-root.is-open {
+            opacity: 1;
+            visibility: visible;
+        }
+
+        .confirm-dialog {
+            width: 100%;
+            max-width: 400px;
+            background: var(--surface);
+            border: 1px solid var(--line);
+            border-radius: var(--radius) var(--radius) 0 0;
+            padding: 18px 18px max(16px, env(safe-area-inset-bottom));
+            box-shadow: 0 -12px 40px rgba(0, 0, 0, 0.14);
+            transform: translateY(100%);
+            transition: transform 0.22s ease;
+        }
+
+        .confirm-root.is-open .confirm-dialog {
+            transform: translateY(0);
+        }
+
+        .confirm-icon-wrap {
+            width: 44px;
+            height: 44px;
+            margin: 0 auto 12px;
+            border-radius: 12px;
+            background: var(--primary-weak);
+            color: var(--primary);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 22px;
+            line-height: 1;
+        }
+
+        .confirm-root.confirm-danger .confirm-icon-wrap {
+            background: rgba(220, 38, 38, 0.1);
+            color: var(--danger);
+        }
+
+        .confirm-title {
+            margin: 0 0 8px;
+            font-size: 18px;
+            font-weight: 700;
+            text-align: center;
+            color: var(--ink);
+            letter-spacing: -0.02em;
+        }
+
+        .confirm-message {
+            margin: 0 0 20px;
+            font-size: 15px;
+            line-height: 1.55;
+            color: var(--muted);
+            text-align: center;
+        }
+
+        .confirm-actions {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+        }
+
+        .confirm-actions .btn {
+            min-height: var(--tap);
+            width: 100%;
+        }
+
+        @media (min-width: 560px) {
+            .shell {
+                max-width: 720px;
+                margin: 0 auto;
+                padding-bottom: calc(76px + env(safe-area-inset-bottom, 0px));
             }
 
-            .hero-card,
-            .panel {
-                padding: 18px;
+            .metrics-rail {
+                padding: 7px 10px 8px;
             }
 
-            h1 {
-                margin-top: 12px;
-                font-size: clamp(26px, 8vw, 34px);
-            }
-
-            .hero-copy {
-                font-size: 14px;
-                line-height: 1.65;
-            }
-
-            .stat-grid,
-            .task-meta {
-                grid-template-columns: repeat(2, minmax(0, 1fr));
-            }
-
-            .stat {
-                padding: 14px;
-            }
-
-            .stat-value {
-                font-size: 24px;
-            }
-
-            .toolbar {
-                align-items: stretch;
-                flex-direction: column;
-            }
-
-            .toolbar .actions,
-            .form-grid .actions {
+            .metrics-rail-items {
                 display: grid;
-                grid-template-columns: 1fr;
-                width: 100%;
+                grid-template-columns: repeat(5, minmax(0, 1fr));
+                column-gap: clamp(8px, 2vw, 18px);
+                row-gap: 4px;
+                align-items: start;
             }
 
-            .toolbar .actions select,
-            .form-grid .actions button {
-                width: 100%;
+            .metric-item {
+                align-items: center;
+                text-align: center;
             }
 
-            .task-card {
-                padding: 16px;
+            .metric-item .metric-k {
+                white-space: normal;
+                text-align: center;
+                max-width: 100%;
             }
 
-            .task-top {
-                flex-direction: column;
-                align-items: stretch;
-                gap: 10px;
+            .metric-item .metric-v {
+                text-align: center;
             }
 
-            .status {
-                align-self: flex-start;
+            .list-head {
+                flex-direction: row;
+                align-items: center;
+                justify-content: space-between;
+            }
+            .list-head select.filter { max-width: 220px; }
+            .task-btns {
+                flex-direction: row;
+                flex-wrap: wrap;
+            }
+            .task-btns .btn { width: auto; flex: 1 1 calc(50% - 4px); min-width: 120px; }
+
+            .modal-root {
+                align-items: center;
+                padding: max(16px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(16px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
             }
 
-            .task-meta {
-                gap: 10px;
+            .modal-dialog {
+                border-radius: var(--radius);
+                padding: 18px;
+                max-height: min(86vh, 640px);
+                transform: translateY(12px) scale(0.98);
+                opacity: 0;
+                transition: transform 0.2s ease, opacity 0.2s ease;
             }
 
-            .task-actions {
-                grid-template-columns: 1fr 1fr;
+            .modal-root.is-open .modal-dialog {
+                transform: translateY(0) scale(1);
+                opacity: 1;
             }
 
-            .toast {
-                left: 12px;
-                right: 12px;
-                bottom: 12px;
-            }
-        }
-
-        @media (max-width: 480px) {
-            .eyebrow {
-                font-size: 11px;
+            .confirm-root {
+                align-items: center;
+                padding: max(16px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(16px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
             }
 
-            .task-name {
-                font-size: 16px;
+            .confirm-dialog {
+                border-radius: var(--radius);
+                padding: 22px 22px 20px;
+                max-width: min(400px, 100%);
+                transform: translateY(10px) scale(0.97);
+                opacity: 0;
+                transition: transform 0.2s ease, opacity 0.2s ease;
             }
 
-            .task-meta {
-                grid-template-columns: 1fr 1fr;
-                font-size: 11px;
+            .confirm-root.is-open .confirm-dialog {
+                transform: translateY(0) scale(1);
+                opacity: 1;
             }
 
-            .task-actions {
-                grid-template-columns: 1fr;
+            .confirm-actions {
+                gap: 12px;
             }
         }
     </style>
 </head>
 <body>
     <div class="shell">
-        <section class="hero">
-            <div class="hero-card">
-                <span class="eyebrow">HLS Download Orchestrator</span>
-                <h1>高吞吐 HLS 任务控制台</h1>
-                <p class="hero-copy">页面只展示任务级状态和轻量进度，后端以 manifest/progress 文件承接分片事实，不再维护独立 task_item 表。</p>
-                <div class="stat-grid">
-                    <div class="stat"><div class="stat-value" id="stat-total">0</div><div class="stat-label">总任务</div></div>
-                    <div class="stat"><div class="stat-value" id="stat-active">0</div><div class="stat-label">下载中</div></div>
-                    <div class="stat"><div class="stat-value" id="stat-failed">0</div><div class="stat-label">失败任务</div></div>
-                </div>
+        <header class="top">
+            <h1>HLS 下载</h1>
+            <div class="top-actions">
+                <button type="button" class="icon-btn" id="sync-all" title="对账">对账</button>
+                <button type="button" class="icon-btn" id="refresh-all" title="刷新">刷新</button>
             </div>
-            <div class="panel">
-                <h2>新增下载任务</h2>
-                <div class="form-grid">
-                    <div>
-                        <label for="task-name">任务名称</label>
-                        <input id="task-name" placeholder="可留空，默认从 URL 推导">
-                    </div>
-                    <div>
-                        <label for="task-url">M3U8 地址</label>
-                        <input id="task-url" placeholder="https://example.com/video.m3u8">
-                    </div>
-                    <div class="actions">
-                        <button class="primary" id="submit-task">创建任务</button>
-                        <button class="ghost" id="sync-all">对账未完成项</button>
-                        <button class="ghost" id="refresh-all">刷新列表</button>
-                    </div>
+        </header>
+
+        <section class="metrics-rail" id="metrics-rail" aria-label="运行态与刷盘指标">
+            <div class="metrics-rail-items">
+                <div class="metric-item">
+                    <span class="metric-k">runtime 数</span>
+                    <span class="metric-v" id="metric-runtime-count">—</span>
+                </div>
+                <div class="metric-item">
+                    <span class="metric-k">脏 runtime</span>
+                    <span class="metric-v" id="metric-dirty-count">—</span>
+                </div>
+                <div class="metric-item">
+                    <span class="metric-k">活跃调度</span>
+                    <span class="metric-v" id="metric-active-dispatches">—</span>
+                </div>
+                <div class="metric-item">
+                    <span class="metric-k">上次刷盘</span>
+                    <span class="metric-v" id="metric-last-flush-ms">—</span>
+                </div>
+                <div class="metric-item">
+                    <span class="metric-k">平均刷盘</span>
+                    <span class="metric-v" id="metric-avg-flush-ms">—</span>
                 </div>
             </div>
         </section>
 
-        <section class="layout">
-            <div class="panel">
-                <div class="toolbar">
-                    <h2>任务列表</h2>
-                    <div class="actions">
-                        <select id="status-filter">
-                            <option value="">全部状态</option>
-                            <option value="pending">pending</option>
-                            <option value="parsing">parsing</option>
-                            <option value="downloading">downloading</option>
-                            <option value="paused">paused</option>
-                            <option value="failed">failed</option>
-                            <option value="completed">completed</option>
-                        </select>
-                    </div>
-                </div>
-                <div class="task-list" id="task-list"></div>
+        <div class="stats" aria-label="任务概览">
+            <div class="stat-pill"><b id="stat-total">0</b><span>全部</span></div>
+            <div class="stat-pill"><b id="stat-active">0</b><span>进行中</span></div>
+            <div class="stat-pill"><b id="stat-failed">0</b><span>失败</span></div>
+        </div>
+
+        <section class="card">
+            <div class="list-head">
+                <h2>任务列表</h2>
+                <select id="status-filter" class="filter" aria-label="按状态筛选">
+                    <option value="">全部状态</option>
+                    <option value="pending">pending</option>
+                    <option value="parsing">parsing</option>
+                    <option value="downloading">downloading</option>
+                    <option value="paused">paused</option>
+                    <option value="failed">failed</option>
+                    <option value="completed">completed</option>
+                </select>
             </div>
+            <div class="task-list" id="task-list"></div>
         </section>
     </div>
 
-    <div class="toast" id="toast"></div>
+    <div class="fab-create" id="fab-create" aria-hidden="false">
+        <button type="button" class="fab-create-btn" id="fab-create-open" aria-label="新建任务">
+            <span class="fab-create-icon" aria-hidden="true">+</span>
+            <span>新建任务</span>
+        </button>
+    </div>
+
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+    <div
+        class="modal-root"
+        id="create-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-hidden="true"
+        aria-labelledby="create-modal-title"
+    >
+        <div class="modal-dialog" id="create-modal-dialog">
+            <div class="modal-head">
+                <h2 id="create-modal-title">新建任务</h2>
+                <button type="button" class="modal-close" id="close-create-modal" aria-label="关闭">×</button>
+            </div>
+            <div class="field">
+                <label for="task-name">名称（可选）</label>
+                <input id="task-name" autocomplete="off" placeholder="留空则从链接生成">
+            </div>
+            <div class="field">
+                <label for="task-url">M3U8 链接</label>
+                <input id="task-url" type="url" inputmode="url" autocomplete="off" placeholder="https://…/index.m3u8">
+            </div>
+            <div class="row-actions modal-actions">
+                <button type="button" class="btn btn-ghost" id="cancel-create-modal">取消</button>
+                <button type="button" class="btn btn-primary" id="submit-task">创建</button>
+            </div>
+        </div>
+    </div>
+
+    <div
+        class="confirm-root"
+        id="confirm-modal"
+        role="alertdialog"
+        aria-modal="true"
+        aria-hidden="true"
+        aria-labelledby="confirm-title"
+        aria-describedby="confirm-message"
+    >
+        <div class="confirm-dialog" id="confirm-dialog">
+            <div class="confirm-icon-wrap" aria-hidden="true">?</div>
+            <h2 class="confirm-title" id="confirm-title">请确认</h2>
+            <p class="confirm-message" id="confirm-message"></p>
+            <div class="confirm-actions">
+                <button type="button" class="btn btn-ghost" id="confirm-cancel">取消</button>
+                <button type="button" class="btn btn-primary" id="confirm-ok">确定</button>
+            </div>
+        </div>
+    </div>
 
     <script>
         const API = '/api/v1';
@@ -468,22 +854,167 @@
             taskName: document.getElementById('task-name'),
             taskURL: document.getElementById('task-url'),
             statusFilter: document.getElementById('status-filter'),
-            toast: document.getElementById('toast')
+            toast: document.getElementById('toast'),
+            createModal: document.getElementById('create-modal'),
+            createModalDialog: document.getElementById('create-modal-dialog'),
+            fabCreate: document.getElementById('fab-create'),
+            confirmModal: document.getElementById('confirm-modal'),
+            confirmMessage: document.getElementById('confirm-message'),
+            confirmTitle: document.getElementById('confirm-title'),
+            confirmOk: document.getElementById('confirm-ok'),
+            confirmCancel: document.getElementById('confirm-cancel')
         };
 
+        let createModalPreviouslyFocused = null;
+        let confirmResolve = null;
+        let confirmPreviousFocus = null;
+
+        document.getElementById('fab-create-open').addEventListener('click', openCreateModal);
+        document.getElementById('close-create-modal').addEventListener('click', closeCreateModal);
+        document.getElementById('cancel-create-modal').addEventListener('click', closeCreateModal);
         document.getElementById('submit-task').addEventListener('click', createTask);
         document.getElementById('sync-all').addEventListener('click', syncAll);
         document.getElementById('refresh-all').addEventListener('click', fetchTasks);
+
+        el.createModal.addEventListener('click', event => {
+            if (event.target === el.createModal) closeCreateModal();
+        });
+
+        el.confirmModal.addEventListener('click', event => {
+            if (event.target === el.confirmModal) finishConfirm(false);
+        });
+        el.confirmCancel.addEventListener('click', () => finishConfirm(false));
+        el.confirmOk.addEventListener('click', () => finishConfirm(true));
+
+        document.addEventListener('keydown', event => {
+            if (event.key !== 'Escape') return;
+            if (el.confirmModal.classList.contains('is-open')) {
+                event.preventDefault();
+                finishConfirm(false);
+                return;
+            }
+            if (el.createModal.classList.contains('is-open')) {
+                event.preventDefault();
+                closeCreateModal();
+            }
+        });
         el.statusFilter.addEventListener('change', () => {
             state.taskFilter = el.statusFilter.value;
+            updateStats();
             renderTasks();
         });
 
         fetchTasks();
 
+        function updateOverlays() {
+            const locked = el.createModal.classList.contains('is-open') ||
+                el.confirmModal.classList.contains('is-open');
+            document.body.classList.toggle('modal-open', locked);
+            if (el.fabCreate) el.fabCreate.setAttribute('aria-hidden', locked ? 'true' : 'false');
+        }
+
+        function openCreateModal() {
+            createModalPreviouslyFocused = document.activeElement;
+            el.createModal.classList.add('is-open');
+            el.createModal.setAttribute('aria-hidden', 'false');
+            updateOverlays();
+            requestAnimationFrame(() => el.taskURL.focus());
+        }
+
+        function closeCreateModal() {
+            if (!el.createModal.classList.contains('is-open')) return;
+            el.createModal.classList.remove('is-open');
+            el.createModal.setAttribute('aria-hidden', 'true');
+            updateOverlays();
+            if (createModalPreviouslyFocused && typeof createModalPreviouslyFocused.focus === 'function') {
+                createModalPreviouslyFocused.focus();
+            }
+        }
+
+        function confirmConfigForAction(action) {
+            const verb = action || 'delete';
+            if (verb === 'delete') {
+                return {
+                    title: '删除任务',
+                    message: '删除后将移除记录与已下载文件，且不可恢复。确定删除该任务吗？',
+                    okText: '删除',
+                    danger: true,
+                    icon: '!'
+                };
+            }
+            if (verb === 'pause') {
+                return {
+                    title: '暂停下载',
+                    message: '暂停后可在列表中随时继续。确定暂停该任务吗？',
+                    okText: '暂停',
+                    danger: false,
+                    icon: '\u23F8'
+                };
+            }
+            if (verb === 'resume') {
+                return {
+                    title: '继续下载',
+                    message: '将从当前进度继续拉取分片。确定继续吗？',
+                    okText: '继续',
+                    danger: false,
+                    icon: '▶'
+                };
+            }
+            if (verb === 'retry') {
+                return {
+                    title: '重试失败项',
+                    message: '将清空失败标记并重新排队失败的分片。确定重试吗？',
+                    okText: '重试',
+                    danger: false,
+                    icon: '↻'
+                };
+            }
+            return {
+                title: '请确认',
+                message: `确定要执行「${verb}」吗？`,
+                okText: '确定',
+                danger: false,
+                icon: '?'
+            };
+        }
+
+        function showConfirm(action) {
+            if (confirmResolve) finishConfirm(false);
+            const cfg = confirmConfigForAction(action);
+            return new Promise(resolve => {
+                confirmResolve = resolve;
+                confirmPreviousFocus = document.activeElement;
+                el.confirmTitle.textContent = cfg.title;
+                el.confirmMessage.textContent = cfg.message;
+                el.confirmCancel.textContent = '取消';
+                el.confirmOk.textContent = cfg.okText;
+                el.confirmOk.className = 'btn ' + (cfg.danger ? 'btn-danger' : 'btn-primary');
+                el.confirmModal.classList.toggle('confirm-danger', !!cfg.danger);
+                const iconWrap = el.confirmModal.querySelector('.confirm-icon-wrap');
+                if (iconWrap) iconWrap.textContent = cfg.icon || '?';
+                el.confirmModal.classList.add('is-open');
+                el.confirmModal.setAttribute('aria-hidden', 'false');
+                updateOverlays();
+                requestAnimationFrame(() => el.confirmOk.focus());
+            });
+        }
+
+        function finishConfirm(value) {
+            if (!confirmResolve) return;
+            const cb = confirmResolve;
+            confirmResolve = null;
+            el.confirmModal.classList.remove('is-open');
+            el.confirmModal.classList.remove('confirm-danger');
+            el.confirmModal.setAttribute('aria-hidden', 'true');
+            updateOverlays();
+            const prev = confirmPreviousFocus;
+            confirmPreviousFocus = null;
+            if (prev && typeof prev.focus === 'function') prev.focus();
+            cb(!!value);
+        }
+
         async function fetchTasks() {
-            const query = state.taskFilter ? `?status=${encodeURIComponent(state.taskFilter)}` : '';
-            const res = await fetch(`${API}/tasks${query}`);
+            const res = await fetch(`${API}/tasks`);
             const data = await res.json();
             state.tasks = data.items || [];
             state.metrics = data.metrics || {};
@@ -499,62 +1030,87 @@
         }
 
         function updateStats() {
-            document.getElementById('stat-total').textContent = state.tasks.length;
-            document.getElementById('stat-active').textContent = state.metrics.runtime_count ?? state.tasks.filter(task => task.status === 'downloading').length;
-            document.getElementById('stat-failed').textContent = state.metrics.dirty_runtime_count ?? state.tasks.filter(task => task.status === 'failed').length;
-            document.querySelector('#stat-total + .stat-label').textContent = '总任务';
-            document.querySelector('#stat-active + .stat-label').textContent = 'runtime 数';
-            document.querySelector('#stat-failed + .stat-label').textContent = '脏 runtime';
-            const heroCopy = document.querySelector('.hero-copy');
-            heroCopy.textContent = `页面只展示任务级状态和轻量进度。活跃调度 ${state.metrics.active_dispatches ?? 0}，最近刷盘 ${state.metrics.last_flush_cost_ms ?? 0}ms，平均刷盘 ${state.metrics.average_flush_cost_ms ?? 0}ms。`;
+            const all = state.tasks;
+            const filtered = state.taskFilter
+                ? all.filter(task => task.status === state.taskFilter)
+                : all;
+            document.getElementById('stat-total').textContent = state.taskFilter ? filtered.length : all.length;
+            document.getElementById('stat-active').textContent = all.filter(t =>
+                ['downloading', 'parsing'].includes(t.status)).length;
+            document.getElementById('stat-failed').textContent = all.filter(t => t.status === 'failed').length;
+
+            const totalLabel = document.querySelector('#stat-total + span');
+            const activeLabel = document.querySelector('#stat-active + span');
+            if (totalLabel) totalLabel.textContent = state.taskFilter ? '本筛选' : '全部';
+            if (activeLabel) activeLabel.textContent = '进行中';
+            updateMetricsRail();
+        }
+
+        function updateMetricsRail() {
+            const m = state.metrics || {};
+            const fmt = (v, suffix = '') => {
+                if (v === undefined || v === null || Number.isNaN(Number(v))) return '—';
+                return String(v) + suffix;
+            };
+            const set = (id, text) => {
+                const node = document.getElementById(id);
+                if (node) node.textContent = text;
+            };
+            set('metric-runtime-count', fmt(m.runtime_count));
+            set('metric-dirty-count', fmt(m.dirty_runtime_count));
+            set('metric-active-dispatches', fmt(m.active_dispatches));
+            set('metric-last-flush-ms', fmt(m.last_flush_cost_ms, ' ms'));
+            set('metric-avg-flush-ms', fmt(m.average_flush_cost_ms, ' ms'));
         }
 
         function renderTasks() {
-            const tasks = state.taskFilter ? state.tasks.filter(task => task.status === state.taskFilter) : state.tasks;
+            const tasks = state.taskFilter
+                ? state.tasks.filter(task => task.status === state.taskFilter)
+                : state.tasks;
             if (!tasks.length) {
-                el.taskList.innerHTML = '<div class="empty">当前没有任务。</div>';
+                const msg = state.taskFilter ? '当前筛选下暂无任务' : '暂无任务';
+                el.taskList.innerHTML = `<div class="empty"><p class="empty-msg">${escapeHTML(msg)}</p></div>`;
                 return;
             }
 
             el.taskList.innerHTML = tasks.map(task => {
                 const progress = Math.round((Number(task.progress || 0)) * 100);
                 const color = statusColor(task.status);
+                const total = task.total_segments || task.total_items || 0;
+                const done = task.downloaded_segments ?? task.done_items ?? 0;
+                const url = escapeHTML(task.original_url);
+                const lock = state.actionLocks.has(task.id);
                 return `
-                    <article class="task-card" data-id="${task.id}">
-                        <div class="task-top">
-                            <div>
-                                <h3 class="task-name">${escapeHTML(task.name || 'Untitled Task')}</h3>
-                                <div class="task-url">${escapeHTML(task.original_url)}</div>
+                    <article class="task" data-id="${task.id}">
+                        <div class="task-main">
+                            <div class="task-hd">
+                                <h3 class="task-name">${escapeHTML(task.name || '未命名')}</h3>
+                                <span class="badge" style="color:${color};">${task.status}</span>
                             </div>
-                            <div class="status" style="color:${color};">${task.status}</div>
+                            <div class="task-url" title="${url}">${url}</div>
+                            <div class="progress"><span style="width:${progress}%; background:${progressBar(task.status)}"></span></div>
+                            <div class="task-sum">${done}/${total} · 失败 ${task.failed_items || 0} · ${progress}%</div>
+                            <div class="task-btns">
+                                ${task.status === 'downloading' ? `<button type="button" class="btn btn-warn" data-action="pause" ${lock ? 'disabled' : ''}>${lock ? '…' : '暂停'}</button>` : ''}
+                                ${['paused', 'failed'].includes(task.status) ? `<button type="button" class="btn btn-soft" data-action="resume" ${lock ? 'disabled' : ''}>${lock ? '…' : '继续'}</button>` : ''}
+                                ${task.failed_items > 0 ? `<button type="button" class="btn btn-soft" data-action="retry" ${lock ? 'disabled' : ''}>${lock ? '…' : '重试'}</button>` : ''}
+                                <button type="button" class="btn btn-danger" data-action="delete" ${lock ? 'disabled' : ''}>${lock ? '…' : '删除'}</button>
+                            </div>
                         </div>
-                        <div class="progress"><span style="width:${progress}%; background:${progressColor(task.status)}"></span></div>
-                        <div style="font-size:13px; color:var(--muted);">${task.downloaded_segments}/${task.total_segments || task.total_items} 已完成，失败 ${task.failed_items || 0}</div>
-                        <div class="task-meta">
-                            <div>任务ID<br><strong>${task.id.slice(0, 10)}</strong></div>
-                            <div>进度<br><strong>${progress}%</strong></div>
-                            <div>分片<br><strong>${task.done_items}/${task.total_items}</strong></div>
-                            <div>状态<br><strong>${task.status}</strong></div>
-                        </div>
-                        <div class="task-actions">
-                            <button class="primary" data-action="play">代理播放</button>
-                            ${task.status === 'downloading' ? `<button class="warn" data-action="pause" ${state.actionLocks.has(task.id) ? 'disabled' : ''}>${state.actionLocks.has(task.id) ? '处理中' : '暂停'}</button>` : ''}
-                            ${['paused', 'failed'].includes(task.status) ? `<button class="soft" data-action="resume" ${state.actionLocks.has(task.id) ? 'disabled' : ''}>${state.actionLocks.has(task.id) ? '处理中' : '恢复'}</button>` : ''}
-                            ${task.failed_items > 0 ? `<button class="soft" data-action="retry" ${state.actionLocks.has(task.id) ? 'disabled' : ''}>${state.actionLocks.has(task.id) ? '处理中' : '重试失败项'}</button>` : ''}
-                            <button class="danger" data-action="delete" ${state.actionLocks.has(task.id) ? 'disabled' : ''}>${state.actionLocks.has(task.id) ? '处理中' : '删除'}</button>
-                        </div>
+                        <button type="button" class="task-play-zone" data-action="play" aria-label="代理播放 M3U8" title="代理播放">
+                            <span class="task-play-icon" aria-hidden="true">▶</span>
+                            <span class="task-play-label">播放</span>
+                        </button>
                     </article>
                 `;
             }).join('');
 
-            [...el.taskList.querySelectorAll('.task-card')].forEach(card => {
+            el.taskList.querySelectorAll('.task').forEach(card => {
                 card.addEventListener('click', event => {
-                    const action = event.target.getAttribute('data-action');
-                    const id = card.dataset.id;
-                    if (action) {
-                        event.stopPropagation();
-                        quickAction(id, action);
-                    }
+                    const btn = event.target.closest('[data-action]');
+                    if (!btn) return;
+                    event.stopPropagation();
+                    quickAction(card.dataset.id, btn.getAttribute('data-action'));
                 });
             });
         }
@@ -563,7 +1119,7 @@
             const name = el.taskName.value.trim();
             const url = el.taskURL.value.trim();
             if (!url) {
-                toast('请输入 m3u8 地址', true);
+                toast('请填写 M3U8 链接', true);
                 return;
             }
             const res = await fetch(`${API}/tasks`, {
@@ -577,7 +1133,8 @@
             }
             el.taskName.value = '';
             el.taskURL.value = '';
-            toast('任务已提交');
+            closeCreateModal();
+            toast('已创建');
             fetchTasks();
         }
 
@@ -604,10 +1161,8 @@
             if (state.actionLocks.has(taskID)) return;
             let url = `${API}/tasks/${taskID}`;
             let options = override || { method: 'POST' };
-            if (action) {
-                url += `/${action}`;
-            }
-            if (!confirm(`确认执行 ${action || 'delete'} 操作？`)) return;
+            if (action) url += `/${action}`;
+            if (!(await showConfirm(action))) return;
             state.actionLocks.add(taskID);
             applyOptimisticTaskAction(taskID, action);
             renderTasks();
@@ -621,7 +1176,7 @@
                 toast(await res.text(), true);
                 return;
             }
-            toast(action ? `${action} 已执行` : '任务已删除');
+            toast(action ? '已执行' : '已删除');
             state.actionLocks.delete(taskID);
             await fetchTasks();
         }
@@ -629,33 +1184,35 @@
         function applyOptimisticTaskAction(taskID, action) {
             state.tasks = state.tasks.map(task => {
                 if (task.id !== taskID) return task;
-                if (action === 'pause') {
-                    return { ...task, status: 'paused' };
-                }
-                if (action === 'resume' || action === 'retry') {
-                    return { ...task, status: 'downloading' };
-                }
+                if (action === 'pause') return { ...task, status: 'paused' };
+                if (action === 'resume' || action === 'retry') return { ...task, status: 'downloading' };
                 return task;
             }).filter(task => !(task.id === taskID && action === ''));
         }
 
         async function syncAll() {
-            const res = await fetch(`${API}/tasks/sync`, { method: 'POST' });
-            if (!res.ok) {
-                toast(await res.text(), true);
-                return;
+            const btn = document.getElementById('sync-all');
+            btn.disabled = true;
+            try {
+                const res = await fetch(`${API}/tasks/sync`, { method: 'POST' });
+                if (!res.ok) {
+                    toast(await res.text(), true);
+                    return;
+                }
+                const data = await res.json();
+                toast(`已更新 ${data.updated || 0} 项`);
+                fetchTasks();
+            } finally {
+                btn.disabled = false;
             }
-            const data = await res.json();
-            toast(`已核对 ${data.updated || 0} 个未完成文件`);
-            fetchTasks();
         }
 
         function toast(message, isError = false) {
-            el.toast.textContent = message || (isError ? '操作失败' : '操作成功');
-            el.toast.style.background = isError ? 'rgba(185, 28, 28, 0.94)' : 'rgba(31,42,44,0.92)';
+            el.toast.textContent = message || (isError ? '失败' : '成功');
+            el.toast.style.background = isError ? 'rgba(185, 28, 28, 0.94)' : 'rgba(17, 24, 39, 0.92)';
             el.toast.classList.add('show');
             clearTimeout(window.__toastTimer);
-            window.__toastTimer = setTimeout(() => el.toast.classList.remove('show'), 2400);
+            window.__toastTimer = setTimeout(() => el.toast.classList.remove('show'), 2200);
         }
 
         function statusColor(status) {
@@ -668,12 +1225,12 @@
             }
         }
 
-        function progressColor(status) {
+        function progressBar(status) {
             switch (status) {
-                case 'completed': return 'linear-gradient(90deg, #16a34a, #22c55e)';
-                case 'failed': return 'linear-gradient(90deg, #dc2626, #ef4444)';
-                case 'paused': return 'linear-gradient(90deg, #d97706, #f59e0b)';
-                default: return 'linear-gradient(90deg, #0f766e, #0ea5a0)';
+                case 'completed': return 'var(--ok)';
+                case 'failed': return 'var(--danger)';
+                case 'paused': return 'var(--warn)';
+                default: return 'var(--primary)';
             }
         }
 
