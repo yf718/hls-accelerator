@@ -62,10 +62,6 @@ func (s *Server) Start() error {
 	mux.HandleFunc("/proxy/seg/", s.handleSegment)
 	mux.HandleFunc("/proxy/key/", s.handleKey)
 
-	if config.GlobalConfig.AutoCleanupEnabled {
-		go s.startAutoCleanup()
-	}
-
 	log.Printf("Proxy starting at http://localhost%s", s.addr)
 	return http.ListenAndServe(s.addr, mux)
 }
@@ -258,22 +254,4 @@ func (s *Server) handleProxyFile(w http.ResponseWriter, r *http.Request, prefix 
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.WriteHeader(resp.StatusCode)
 	_, _ = io.Copy(w, resp.Body)
-}
-
-func (s *Server) startAutoCleanup() {
-	now := time.Now()
-	next := time.Date(now.Year(), now.Month(), now.Day()+1, 3, 0, 0, 0, now.Location())
-	time.Sleep(next.Sub(now))
-	s.runCleanup()
-	ticker := time.NewTicker(24 * time.Hour)
-	defer ticker.Stop()
-	for range ticker.C {
-		s.runCleanup()
-	}
-}
-
-func (s *Server) runCleanup() {
-	if err := s.taskManager.DeleteCompletedTasks(); err != nil {
-		log.Printf("auto cleanup failed: %v", err)
-	}
 }

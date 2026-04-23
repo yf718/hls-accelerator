@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"hls-accelerator/internal/cache"
 	"hls-accelerator/internal/config"
@@ -949,23 +948,6 @@ func (m *Manager) HandleAdd(w http.ResponseWriter, r *http.Request, triggerFunc 
 	}()
 	w.WriteHeader(http.StatusCreated)
 	writeJSON(w, map[string]interface{}{"id": taskID, "name": body.Name, "url": body.URL, "status": TaskStatusPending})
-}
-
-func (m *Manager) DeleteCompletedTasks() error {
-	tasks, err := m.GetTasksByStatus(TaskStatusCompleted)
-	if err != nil {
-		return err
-	}
-	var errs []string
-	for _, item := range tasks {
-		if err := m.DeleteTask(item.ID); err != nil {
-			errs = append(errs, err.Error())
-		}
-	}
-	if len(errs) > 0 {
-		return errors.New(strings.Join(errs, "; "))
-	}
-	return nil
 }
 
 func buildManifest(taskID, originalURL string, items []playlist.DownloadItem, totalSegments int) TaskManifest {
