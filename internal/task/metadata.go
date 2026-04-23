@@ -73,6 +73,14 @@ type TaskSummary struct {
 	Progress           float64    `json:"progress"`
 }
 
+type RuntimeMetrics struct {
+	RuntimeCount       int   `json:"runtime_count"`
+	DirtyRuntimeCount  int   `json:"dirty_runtime_count"`
+	ActiveDispatches   int   `json:"active_dispatches"`
+	LastFlushCostMs    int64 `json:"last_flush_cost_ms"`
+	AverageFlushCostMs int64 `json:"average_flush_cost_ms"`
+}
+
 type AddTaskRequest struct {
 	Name string `json:"name"`
 	URL  string `json:"url"`

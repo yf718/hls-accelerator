@@ -43,6 +43,11 @@ type Manager struct {
 
 	dispatchMu sync.Mutex
 	dispatches map[string]context.CancelFunc
+
+	metricsMu       sync.Mutex
+	lastFlushCost   time.Duration
+	totalFlushCost  time.Duration
+	totalFlushCount int64
 }
 
 type aria2NotificationEvent struct {
@@ -136,6 +141,42 @@ func (m *Manager) GetTasks() ([]TaskSummary, error) {
 	return out, nil
 }
 
+func (m *Manager) RuntimeMetrics() RuntimeMetrics {
+	m.runtimeMu.Lock()
+	runtimeCount := len(m.runtimes)
+	dirtyCount := 0
+	for _, rt := range m.runtimes {
+		rt.mu.Lock()
+		if rt.dirty {
+			dirtyCount++
+		}
+		rt.mu.Unlock()
+	}
+	m.runtimeMu.Unlock()
+
+	m.dispatchMu.Lock()
+	dispatchCount := len(m.dispatches)
+	m.dispatchMu.Unlock()
+
+	m.metricsMu.Lock()
+	lastFlush := m.lastFlushCost
+	totalFlush := m.totalFlushCost
+	totalCount := m.totalFlushCount
+	m.metricsMu.Unlock()
+
+	avg := int64(0)
+	if totalCount > 0 {
+		avg = totalFlush.Milliseconds() / totalCount
+	}
+	return RuntimeMetrics{
+		RuntimeCount:       runtimeCount,
+		DirtyRuntimeCount:  dirtyCount,
+		ActiveDispatches:   dispatchCount,
+		LastFlushCostMs:    lastFlush.Milliseconds(),
+		AverageFlushCostMs: avg,
+	}
+}
+
 func summarizeTask(meta TaskMetadata) TaskSummary {
 	progress := 0.0
 	total := meta.TotalSegments
@@ -169,6 +210,14 @@ func summarizeTask(meta TaskMetadata) TaskSummary {
 }
 
 func (m *Manager) PauseTask(taskID string) (int, error) {
+	meta, err := m.GetTask(taskID)
+	if err != nil {
+		return 0, err
+	}
+	switch meta.Status {
+	case TaskStatusCompleted, TaskStatusDeleted:
+		return 0, fmt.Errorf("task status %s does not support pause", meta.Status)
+	}
 	rt, err := m.loadRuntime(taskID)
 	if err != nil {
 		return 0, err
@@ -192,6 +241,14 @@ func (m *Manager) PauseTask(taskID string) (int, error) {
 }
 
 func (m *Manager) ResumeTask(taskID string) (int, error) {
+	meta, err := m.GetTask(taskID)
+	if err != nil {
+		return 0, err
+	}
+	switch meta.Status {
+	case TaskStatusCompleted, TaskStatusDeleted:
+		return 0, fmt.Errorf("task status %s does not support resume", meta.Status)
+	}
 	rt, err := m.loadRuntime(taskID)
 	if err != nil {
 		return 0, err
@@ -214,6 +271,14 @@ func (m *Manager) ResumeTask(taskID string) (int, error) {
 }
 
 func (m *Manager) RetryTask(taskID string) (int, error) {
+	meta, err := m.GetTask(taskID)
+	if err != nil {
+		return 0, err
+	}
+	switch meta.Status {
+	case TaskStatusCompleted, TaskStatusDeleted:
+		return 0, fmt.Errorf("task status %s does not support retry", meta.Status)
+	}
 	rt, err := m.loadRuntime(taskID)
 	if err != nil {
 		return 0, err
@@ -607,6 +672,7 @@ func (m *Manager) loadRuntime(taskID string) (*taskRuntime, error) {
 }
 
 func (m *Manager) flushRuntime(taskID string, rt *taskRuntime) error {
+	start := time.Now()
 	progress, snapshot := rt.snapshot()
 	if err := writeJSONAtomic(taskProgressPath(taskID), progress); err != nil {
 		return err
@@ -619,7 +685,16 @@ func (m *Manager) flushRuntime(taskID string, rt *taskRuntime) error {
 	case TaskStatusCompleted, TaskStatusFailed:
 		m.evictRuntime(taskID, rt)
 	}
+	m.recordFlushCost(time.Since(start))
 	return nil
+}
+
+func (m *Manager) recordFlushCost(cost time.Duration) {
+	m.metricsMu.Lock()
+	m.lastFlushCost = cost
+	m.totalFlushCost += cost
+	m.totalFlushCount++
+	m.metricsMu.Unlock()
 }
 
 func (m *Manager) hasDispatch(taskID string) bool {
@@ -696,7 +771,11 @@ func (m *Manager) HandleListV1(w http.ResponseWriter, r *http.Request) {
 		}
 		tasks = filtered
 	}
-	writeJSON(w, map[string]interface{}{"total": len(tasks), "items": tasks})
+	writeJSON(w, map[string]interface{}{
+		"total":   len(tasks),
+		"items":   tasks,
+		"metrics": m.RuntimeMetrics(),
+	})
 }
 
 func (m *Manager) HandlePauseV1(w http.ResponseWriter, r *http.Request) {

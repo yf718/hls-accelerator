@@ -342,6 +342,7 @@
         const API = '/api/v1';
         const state = {
             tasks: [],
+            metrics: {},
             taskFilter: '',
             pollTimer: null,
             actionLocks: new Set()
@@ -370,6 +371,7 @@
             const res = await fetch(`${API}/tasks${query}`);
             const data = await res.json();
             state.tasks = data.items || [];
+            state.metrics = data.metrics || {};
             updateStats();
             renderTasks();
             schedulePoll();
@@ -383,8 +385,13 @@
 
         function updateStats() {
             document.getElementById('stat-total').textContent = state.tasks.length;
-            document.getElementById('stat-active').textContent = state.tasks.filter(task => task.status === 'downloading').length;
-            document.getElementById('stat-failed').textContent = state.tasks.filter(task => task.status === 'failed').length;
+            document.getElementById('stat-active').textContent = state.metrics.runtime_count ?? state.tasks.filter(task => task.status === 'downloading').length;
+            document.getElementById('stat-failed').textContent = state.metrics.dirty_runtime_count ?? state.tasks.filter(task => task.status === 'failed').length;
+            document.querySelector('#stat-total + .stat-label').textContent = '总任务';
+            document.querySelector('#stat-active + .stat-label').textContent = 'runtime 数';
+            document.querySelector('#stat-failed + .stat-label').textContent = '脏 runtime';
+            const heroCopy = document.querySelector('.hero-copy');
+            heroCopy.textContent = `页面只展示任务级状态和轻量进度。活跃调度 ${state.metrics.active_dispatches ?? 0}，最近刷盘 ${state.metrics.last_flush_cost_ms ?? 0}ms，平均刷盘 ${state.metrics.average_flush_cost_ms ?? 0}ms。`;
         }
 
         function renderTasks() {

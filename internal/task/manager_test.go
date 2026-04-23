@@ -248,3 +248,97 @@ func TestNewTaskRuntimeStoresRemainingAsManifestIndexes(t *testing.T) {
 		t.Fatal("expected sequence 1 to be marked as segment")
 	}
 }
+
+func TestCompletedTaskRejectsPauseResumeRetryWithoutLoadingRuntime(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	m, err := NewManager(nil, db)
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+
+	meta := TaskMetadata{
+		ID:            "completed-task",
+		Name:          "completed-task",
+		OriginalURL:   "https://example.com/completed.m3u8",
+		CreatedTime:   time.Now(),
+		UpdatedTime:   time.Now(),
+		TotalItems:    1,
+		TotalSegments: 1,
+		DoneItems:     1,
+		DownloadedSegments: 1,
+		Status:        TaskStatusCompleted,
+	}
+	if err := m.CreateTask(meta); err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+
+	if _, err := m.PauseTask(meta.ID); err == nil {
+		t.Fatal("PauseTask should reject completed task")
+	}
+	if _, err := m.ResumeTask(meta.ID); err == nil {
+		t.Fatal("ResumeTask should reject completed task")
+	}
+	if _, err := m.RetryTask(meta.ID); err == nil {
+		t.Fatal("RetryTask should reject completed task")
+	}
+
+	m.runtimeMu.Lock()
+	_, loaded := m.runtimes[meta.ID]
+	m.runtimeMu.Unlock()
+	if loaded {
+		t.Fatal("completed task should not load runtime for pause/resume/retry")
+	}
+}
+
+func TestRuntimeMetricsReportsRuntimeDirtyAndFlushStats(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	m, err := NewManager(nil, db)
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+
+	rt := newTaskRuntime("metrics-task", 1, 1, []ManifestIndexItem{
+		{Seq: 0, Filename: "00001.ts", IsSegment: true},
+	}, TaskProgressFile{TaskID: "metrics-task", Failed: []string{}}, false)
+	rt.mu.Lock()
+	rt.markDirtyLocked()
+	rt.mu.Unlock()
+
+	m.runtimeMu.Lock()
+	m.runtimes["metrics-task"] = rt
+	m.runtimeMu.Unlock()
+
+	m.dispatchMu.Lock()
+	m.dispatches["metrics-task"] = func() {}
+	m.dispatchMu.Unlock()
+
+	m.recordFlushCost(12 * time.Millisecond)
+	m.recordFlushCost(8 * time.Millisecond)
+
+	metrics := m.RuntimeMetrics()
+	if metrics.RuntimeCount != 1 {
+		t.Fatalf("runtime_count = %d, want 1", metrics.RuntimeCount)
+	}
+	if metrics.DirtyRuntimeCount != 1 {
+		t.Fatalf("dirty_runtime_count = %d, want 1", metrics.DirtyRuntimeCount)
+	}
+	if metrics.ActiveDispatches != 1 {
+		t.Fatalf("active_dispatches = %d, want 1", metrics.ActiveDispatches)
+	}
+	if metrics.LastFlushCostMs != 8 {
+		t.Fatalf("last_flush_cost_ms = %d, want 8", metrics.LastFlushCostMs)
+	}
+	if metrics.AverageFlushCostMs != 10 {
+		t.Fatalf("average_flush_cost_ms = %d, want 10", metrics.AverageFlushCostMs)
+	}
+}
