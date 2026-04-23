@@ -287,8 +287,8 @@
         <section class="hero">
             <div class="hero-card">
                 <span class="eyebrow">HLS Download Orchestrator</span>
-                <h1>任务与分片同屏管理</h1>
-                <p class="hero-copy">统一查看任务状态、失败分片、暂停恢复和下载细节。页面只面向下载调度，不介入 m3u8 重写逻辑。</p>
+                <h1>高吞吐 HLS 任务控制台</h1>
+                <p class="hero-copy">页面只展示任务级状态和轻量进度，后端以 manifest/progress 文件承接分片事实，不再维护独立 task_item 表。</p>
                 <div class="stat-grid">
                     <div class="stat"><div class="stat-value" id="stat-total">0</div><div class="stat-label">总任务</div></div>
                     <div class="stat"><div class="stat-value" id="stat-active">0</div><div class="stat-label">下载中</div></div>
@@ -309,7 +309,7 @@
                     </div>
                     <div class="actions">
                         <button class="primary" id="submit-task">创建任务</button>
-                        <button class="ghost" id="sync-all">全量对账</button>
+                        <button class="ghost" id="sync-all">对账未完成项</button>
                         <button class="ghost" id="refresh-all">刷新列表</button>
                     </div>
                 </div>
@@ -421,7 +421,7 @@
                             <button class="primary" data-action="play">代理播放</button>
                             ${task.status === 'downloading' ? `<button class="warn" data-action="pause" ${state.actionLocks.has(task.id) ? 'disabled' : ''}>${state.actionLocks.has(task.id) ? '处理中' : '暂停'}</button>` : ''}
                             ${['paused', 'failed'].includes(task.status) ? `<button class="soft" data-action="resume" ${state.actionLocks.has(task.id) ? 'disabled' : ''}>${state.actionLocks.has(task.id) ? '处理中' : '恢复'}</button>` : ''}
-                            ${task.failed_items > 0 ? `<button class="soft" data-action="retry" ${state.actionLocks.has(task.id) ? 'disabled' : ''}>${state.actionLocks.has(task.id) ? '处理中' : '重试失败'}</button>` : ''}
+                            ${task.failed_items > 0 ? `<button class="soft" data-action="retry" ${state.actionLocks.has(task.id) ? 'disabled' : ''}>${state.actionLocks.has(task.id) ? '处理中' : '重试失败项'}</button>` : ''}
                             <button class="danger" data-action="delete" ${state.actionLocks.has(task.id) ? 'disabled' : ''}>${state.actionLocks.has(task.id) ? '处理中' : '删除'}</button>
                         </div>
                     </article>
@@ -474,7 +474,7 @@
                 return;
             }
             if (action === 'retry') {
-                await taskAction(id, 'retry', { method: 'POST', body: JSON.stringify({ item_ids: [] }) });
+                await taskAction(id, 'retry', { method: 'POST' });
                 return;
             }
             await taskAction(id, action);
@@ -527,7 +527,7 @@
                 return;
             }
             const data = await res.json();
-            toast(`已对账 ${data.updated || 0} 个分片`);
+            toast(`已核对 ${data.updated || 0} 个未完成文件`);
             fetchTasks();
         }
 

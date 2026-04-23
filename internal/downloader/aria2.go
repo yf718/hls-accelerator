@@ -640,3 +640,30 @@ func (c *Aria2Client) BatchTellStatus(gids []string) (map[string]StatusDetail, e
 	}
 	return out, nil
 }
+
+func (c *Aria2Client) QueueStatusesByDir(dir string) ([]StatusDetail, error) {
+	if c == nil || dir == "" {
+		return nil, nil
+	}
+
+	gids, err := c.taskQueueGIDs(dir)
+	if err != nil {
+		return nil, err
+	}
+	if len(gids) == 0 {
+		return nil, nil
+	}
+
+	statusMap, err := c.BatchTellStatus(gids)
+	if err != nil {
+		return nil, err
+	}
+
+	out := make([]StatusDetail, 0, len(gids))
+	for _, gid := range gids {
+		if detail, ok := statusMap[gid]; ok {
+			out = append(out, detail)
+		}
+	}
+	return out, nil
+}
