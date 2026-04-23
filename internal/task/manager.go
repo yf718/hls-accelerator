@@ -238,6 +238,12 @@ func (m *Manager) DeleteTask(taskID string) error {
 		return fmt.Errorf("cannot delete running task, please pause it first")
 	}
 	m.cancelDispatch(taskID)
+	if err := m.UpdateTaskStatus(taskID, TaskStatusDeleted); err != nil {
+		return err
+	}
+	m.runtimeMu.Lock()
+	delete(m.runtimes, taskID)
+	m.runtimeMu.Unlock()
 	go m.deleteTaskAsync(taskID)
 	return nil
 }
