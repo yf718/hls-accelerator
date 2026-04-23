@@ -95,12 +95,19 @@ func NewManager(aria2 *downloader.Aria2Client, db *sql.DB) (*Manager, error) {
 }
 
 func (m *Manager) startBackgroundLoops() {
+	// Consume aria2 event notifications and fold them into in-memory runtime state.
 	go m.progressNotificationLoop()
+	// Drain buffered notifications in small batches to avoid per-event overhead.
 	go m.progressNotificationWorker()
+	// Persist dirty runtimes on an adaptive cadence instead of writing on every change.
 	go m.flushDirtyLoop()
+	// Periodically reconcile filesystem / aria2 state as a compensation path.
 	go m.reconcileLoop()
+	// Evict inactive runtimes so long-lived processes do not accumulate stale memory.
 	go m.cleanupRuntimeLoop()
+	// Clean finished task entries from aria2 after a delay to keep aria2 history bounded.
 	go m.aria2CleanupLoop()
+	// Run a low-frequency global purge as a final safety net for leftover aria2 results.
 	go m.dailyPurgeLoop()
 }
 
