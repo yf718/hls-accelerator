@@ -1,13 +1,16 @@
 package task
 
 import (
+	"database/sql"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"hls-accelerator/internal/cache"
 	"hls-accelerator/internal/config"
 	playlist "hls-accelerator/internal/m3u8"
+	_ "modernc.org/sqlite"
 )
 
 func TestBuildManifestDeduplicatesByFilenameAndPreservesLastEntry(t *testing.T) {
@@ -104,5 +107,104 @@ func TestCleanupResumeArtifactsRemovesPartialAndControlFiles(t *testing.T) {
 	}
 	if _, err := os.Stat(controlPath); !os.IsNotExist(err) {
 		t.Fatalf("control file still exists, stat err=%v", err)
+	}
+}
+
+func TestCleanupInactiveRuntimesEvictsPausedButKeepsDownloading(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	m, err := NewManager(nil, db)
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+
+	oldCacheDir := config.GlobalConfig.CacheDir
+	tempDir := t.TempDir()
+	config.GlobalConfig.CacheDir = tempDir
+	t.Cleanup(func() {
+		config.GlobalConfig.CacheDir = oldCacheDir
+	})
+
+	pausedMeta := TaskMetadata{
+		ID:            "paused-task",
+		Name:          "paused-task",
+		OriginalURL:   "https://example.com/paused.m3u8",
+		CreatedTime:   time.Now(),
+		UpdatedTime:   time.Now(),
+		TotalItems:    1,
+		TotalSegments: 1,
+		Status:        TaskStatusPaused,
+	}
+	downloadingMeta := TaskMetadata{
+		ID:            "downloading-task",
+		Name:          "downloading-task",
+		OriginalURL:   "https://example.com/downloading.m3u8",
+		CreatedTime:   time.Now(),
+		UpdatedTime:   time.Now(),
+		TotalItems:    1,
+		TotalSegments: 1,
+		Status:        TaskStatusDownloading,
+	}
+	if err := m.CreateTask(pausedMeta); err != nil {
+		t.Fatalf("CreateTask paused: %v", err)
+	}
+	if err := m.CreateTask(downloadingMeta); err != nil {
+		t.Fatalf("CreateTask downloading: %v", err)
+	}
+
+	pausedManifest := buildManifest(pausedMeta.ID, pausedMeta.OriginalURL, []playlist.DownloadItem{
+		{Filename: "00001.ts", URL: "https://example.com/paused-1.ts", Type: "segment"},
+	}, 1)
+	pausedProgress := buildInitialProgress(pausedManifest)
+	if err := writeJSONAtomic(taskManifestPath(pausedMeta.ID), pausedManifest); err != nil {
+		t.Fatalf("write paused manifest: %v", err)
+	}
+	if err := writeJSONAtomic(taskProgressPath(pausedMeta.ID), pausedProgress); err != nil {
+		t.Fatalf("write paused progress: %v", err)
+	}
+
+	downloadingManifest := buildManifest(downloadingMeta.ID, downloadingMeta.OriginalURL, []playlist.DownloadItem{
+		{Filename: "00001.ts", URL: "https://example.com/downloading-1.ts", Type: "segment"},
+	}, 1)
+	downloadingProgress := buildInitialProgress(downloadingManifest)
+	if err := writeJSONAtomic(taskManifestPath(downloadingMeta.ID), downloadingManifest); err != nil {
+		t.Fatalf("write downloading manifest: %v", err)
+	}
+	if err := writeJSONAtomic(taskProgressPath(downloadingMeta.ID), downloadingProgress); err != nil {
+		t.Fatalf("write downloading progress: %v", err)
+	}
+
+	pausedRT, err := m.loadRuntime(pausedMeta.ID)
+	if err != nil {
+		t.Fatalf("loadRuntime paused: %v", err)
+	}
+	downloadingRT, err := m.loadRuntime(downloadingMeta.ID)
+	if err != nil {
+		t.Fatalf("loadRuntime downloading: %v", err)
+	}
+
+	pausedRT.mu.Lock()
+	pausedRT.lastAccessAt = time.Now().Add(-pausedRuntimeTTL - time.Minute)
+	pausedRT.mu.Unlock()
+	downloadingRT.mu.Lock()
+	downloadingRT.lastAccessAt = time.Now().Add(-pausedRuntimeTTL - time.Minute)
+	downloadingRT.mu.Unlock()
+
+	m.cleanupInactiveRuntimes()
+
+	m.runtimeMu.Lock()
+	_, pausedExists := m.runtimes[pausedMeta.ID]
+	_, downloadingExists := m.runtimes[downloadingMeta.ID]
+	m.runtimeMu.Unlock()
+
+	if pausedExists {
+		t.Fatal("paused runtime should be evicted after ttl")
+	}
+	if !downloadingExists {
+		t.Fatal("downloading runtime should stay resident")
 	}
 }

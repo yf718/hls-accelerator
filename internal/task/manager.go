@@ -22,6 +22,8 @@ import (
 	"time"
 )
 
+const pausedRuntimeTTL = 10 * time.Minute
+
 type Manager struct {
 	mu               sync.Mutex
 	aria2            *downloader.Aria2Client
@@ -52,6 +54,7 @@ type taskRuntime struct {
 	remainingSegments int
 	paused            bool
 	dirty             bool
+	lastAccessAt      time.Time
 }
 
 func NewManager(aria2 *downloader.Aria2Client, db *sql.DB) (*Manager, error) {
@@ -75,6 +78,7 @@ func (m *Manager) startBackgroundLoops() {
 	go m.progressNotificationWorker()
 	go m.flushDirtyLoop()
 	go m.reconcileLoop()
+	go m.cleanupRuntimeLoop()
 }
 
 func (m *Manager) CreateTaskWithItems(meta TaskMetadata, items []playlist.DownloadItem) (bool, error) {
@@ -431,6 +435,42 @@ func (m *Manager) flushDirtyLoop() {
 	}
 }
 
+func (m *Manager) cleanupRuntimeLoop() {
+	ticker := time.NewTicker(time.Minute)
+	defer ticker.Stop()
+	for range ticker.C {
+		m.cleanupInactiveRuntimes()
+	}
+}
+
+func (m *Manager) cleanupInactiveRuntimes() {
+	now := time.Now()
+
+	m.runtimeMu.Lock()
+	snapshot := make(map[string]*taskRuntime, len(m.runtimes))
+	for taskID, rt := range m.runtimes {
+		snapshot[taskID] = rt
+	}
+	m.runtimeMu.Unlock()
+
+	for taskID, rt := range snapshot {
+		status, lastAccessAt, dirty := rt.stateForEviction()
+		if dirty {
+			continue
+		}
+		if status != TaskStatusPaused {
+			continue
+		}
+		if now.Sub(lastAccessAt) < pausedRuntimeTTL {
+			continue
+		}
+		if m.hasDispatch(taskID) {
+			continue
+		}
+		m.evictRuntime(taskID, rt)
+	}
+}
+
 func (m *Manager) reconcileLoop() {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
@@ -506,6 +546,7 @@ func (m *Manager) loadRuntime(taskID string) (*taskRuntime, error) {
 	m.runtimeMu.Lock()
 	if rt, ok := m.runtimes[taskID]; ok {
 		m.runtimeMu.Unlock()
+		rt.touch()
 		return rt, nil
 	}
 	m.runtimeMu.Unlock()
@@ -529,6 +570,7 @@ func (m *Manager) loadRuntime(taskID string) (*taskRuntime, error) {
 	m.runtimeMu.Lock()
 	if existing, ok := m.runtimes[taskID]; ok {
 		m.runtimeMu.Unlock()
+		existing.touch()
 		return existing, nil
 	}
 	m.runtimes[taskID] = rt
@@ -545,7 +587,26 @@ func (m *Manager) flushRuntime(taskID string, rt *taskRuntime) error {
 		return err
 	}
 	rt.markClean()
+	switch snapshot.Status {
+	case TaskStatusCompleted, TaskStatusFailed:
+		m.evictRuntime(taskID, rt)
+	}
 	return nil
+}
+
+func (m *Manager) hasDispatch(taskID string) bool {
+	m.dispatchMu.Lock()
+	_, ok := m.dispatches[taskID]
+	m.dispatchMu.Unlock()
+	return ok
+}
+
+func (m *Manager) evictRuntime(taskID string, rt *taskRuntime) {
+	m.runtimeMu.Lock()
+	if current, ok := m.runtimes[taskID]; ok && current == rt {
+		delete(m.runtimes, taskID)
+	}
+	m.runtimeMu.Unlock()
 }
 
 func (m *Manager) findTaskByGID(gid string) (string, string, bool) {
@@ -802,12 +863,14 @@ func newTaskRuntime(manifest TaskManifest, progress TaskProgressFile, paused boo
 		remainingSegments: remainingSegments,
 		paused:            paused,
 		dirty:             false,
+		lastAccessAt:      time.Now(),
 	}
 }
 
 func (rt *taskRuntime) syncCompletedFiles(taskID string) {
 	rt.mu.Lock()
 	defer rt.mu.Unlock()
+	rt.lastAccessAt = time.Now()
 	for filename, item := range rt.remaining {
 		if cache.FileExists(taskID, filename) && !cache.FileExists(taskID, filename+".aria2") {
 			delete(rt.remaining, filename)
@@ -823,6 +886,7 @@ func (rt *taskRuntime) syncCompletedFiles(taskID string) {
 func (rt *taskRuntime) claimPending(limit int) []ManifestItem {
 	rt.mu.Lock()
 	defer rt.mu.Unlock()
+	rt.lastAccessAt = time.Now()
 	if rt.paused {
 		return nil
 	}
@@ -849,6 +913,7 @@ func (rt *taskRuntime) claimPending(limit int) []ManifestItem {
 func (rt *taskRuntime) bindGID(filename, gid string) bool {
 	rt.mu.Lock()
 	defer rt.mu.Unlock()
+	rt.lastAccessAt = time.Now()
 	delete(rt.dispatching, filename)
 	rt.gidToFile[gid] = filename
 	rt.fileToGID[filename] = gid
@@ -859,6 +924,7 @@ func (rt *taskRuntime) bindGID(filename, gid string) bool {
 func (rt *taskRuntime) registerGID(gid, filename string) {
 	rt.mu.Lock()
 	defer rt.mu.Unlock()
+	rt.lastAccessAt = time.Now()
 	if _, ok := rt.remaining[filename]; !ok {
 		return
 	}
@@ -869,6 +935,7 @@ func (rt *taskRuntime) registerGID(gid, filename string) {
 func (rt *taskRuntime) markCompleted(filename string) bool {
 	rt.mu.Lock()
 	defer rt.mu.Unlock()
+	rt.lastAccessAt = time.Now()
 	item, ok := rt.remaining[filename]
 	if !ok {
 		return false
@@ -890,6 +957,7 @@ func (rt *taskRuntime) markCompleted(filename string) bool {
 func (rt *taskRuntime) markFailed(filename, errMsg string) bool {
 	rt.mu.Lock()
 	defer rt.mu.Unlock()
+	rt.lastAccessAt = time.Now()
 	if _, ok := rt.remaining[filename]; !ok {
 		return false
 	}
@@ -940,6 +1008,7 @@ type runtimeSnapshot struct {
 func (rt *taskRuntime) snapshot() (TaskProgressFile, runtimeSnapshot) {
 	rt.mu.Lock()
 	defer rt.mu.Unlock()
+	rt.lastAccessAt = time.Now()
 
 	pending := make([]string, 0, len(rt.remaining))
 	for filename := range rt.remaining {
@@ -978,6 +1047,28 @@ func (rt *taskRuntime) markClean() {
 	rt.mu.Lock()
 	defer rt.mu.Unlock()
 	rt.dirty = false
+	rt.lastAccessAt = time.Now()
+}
+
+func (rt *taskRuntime) touch() {
+	rt.mu.Lock()
+	rt.lastAccessAt = time.Now()
+	rt.mu.Unlock()
+}
+
+func (rt *taskRuntime) stateForEviction() (string, time.Time, bool) {
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	status := TaskStatusDownloading
+	switch {
+	case len(rt.remaining) == 0:
+		status = TaskStatusCompleted
+	case rt.paused:
+		status = TaskStatusPaused
+	case len(rt.failed) > 0 && len(rt.failed) == len(rt.remaining) && len(rt.fileToGID) == 0 && len(rt.dispatching) == 0:
+		status = TaskStatusFailed
+	}
+	return status, rt.lastAccessAt, rt.dirty
 }
 
 func taskManifestPath(taskID string) string {
