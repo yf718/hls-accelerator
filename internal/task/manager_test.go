@@ -2,6 +2,9 @@ package task
 
 import (
 	"database/sql"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
@@ -9,6 +12,7 @@ import (
 
 	"hls-accelerator/internal/cache"
 	"hls-accelerator/internal/config"
+	"hls-accelerator/internal/downloader"
 	playlist "hls-accelerator/internal/m3u8"
 	_ "modernc.org/sqlite"
 )
@@ -262,16 +266,16 @@ func TestCompletedTaskRejectsPauseResumeRetryWithoutLoadingRuntime(t *testing.T)
 	}
 
 	meta := TaskMetadata{
-		ID:            "completed-task",
-		Name:          "completed-task",
-		OriginalURL:   "https://example.com/completed.m3u8",
-		CreatedTime:   time.Now(),
-		UpdatedTime:   time.Now(),
-		TotalItems:    1,
-		TotalSegments: 1,
-		DoneItems:     1,
+		ID:                 "completed-task",
+		Name:               "completed-task",
+		OriginalURL:        "https://example.com/completed.m3u8",
+		CreatedTime:        time.Now(),
+		UpdatedTime:        time.Now(),
+		TotalItems:         1,
+		TotalSegments:      1,
+		DoneItems:          1,
 		DownloadedSegments: 1,
-		Status:        TaskStatusCompleted,
+		Status:             TaskStatusCompleted,
 	}
 	if err := m.CreateTask(meta); err != nil {
 		t.Fatalf("CreateTask: %v", err)
@@ -357,5 +361,114 @@ func TestNextPurgeTimeTargetsThreeAM(t *testing.T) {
 	want = time.Date(2026, 4, 24, 3, 0, 0, 0, loc)
 	if !next.Equal(want) {
 		t.Fatalf("next purge after 3am = %v, want %v", next, want)
+	}
+}
+
+func TestDeleteTaskAsyncCleansAria2ByDirImmediately(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	var multicallCount int
+	var dirExistsDuringCleanup bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+
+		var req downloader.JsonRpcRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+
+		resp := downloader.JsonRpcResponse{ID: req.ID}
+		switch req.Method {
+		case "aria2.tellActive":
+			if _, err := os.Stat(cache.GetTaskDir("delete-task")); err == nil {
+				dirExistsDuringCleanup = true
+			}
+			resp.Result = []map[string]string{
+				{"gid": "active-1", "dir": cache.GetTaskDir("delete-task")},
+			}
+		case "aria2.tellWaiting":
+			resp.Result = []map[string]string{}
+		case "aria2.tellStopped":
+			resp.Result = []map[string]string{
+				{"gid": "stopped-1", "dir": cache.GetTaskDir("delete-task")},
+			}
+		case "system.multicall":
+			multicallCount++
+			resp.Result = []interface{}{
+				[]interface{}{"OK"},
+				[]interface{}{"OK"},
+				[]interface{}{"OK"},
+				[]interface{}{"OK"},
+			}
+		default:
+			t.Fatalf("unexpected method %s", req.Method)
+		}
+
+		if err := json.NewEncoder(w).Encode(resp); err != nil {
+			t.Fatalf("encode response: %v", err)
+		}
+	}))
+	defer srv.Close()
+
+	oldCacheDir := config.GlobalConfig.CacheDir
+	tempDir := t.TempDir()
+	config.GlobalConfig.CacheDir = tempDir
+	t.Cleanup(func() {
+		config.GlobalConfig.CacheDir = oldCacheDir
+	})
+
+	m := &Manager{
+		aria2: &downloader.Aria2Client{
+			RPCUrl: srv.URL,
+			Client: &http.Client{Timeout: time.Second},
+		},
+		db:        db,
+		deleteSem: make(chan struct{}, 1),
+		runtimes:  make(map[string]*taskRuntime),
+	}
+	if err := m.InitTable(); err != nil {
+		t.Fatalf("InitTable: %v", err)
+	}
+
+	meta := TaskMetadata{
+		ID:            "delete-task",
+		Name:          "delete-task",
+		OriginalURL:   "https://example.com/delete.m3u8",
+		CreatedTime:   time.Now(),
+		UpdatedTime:   time.Now(),
+		TotalItems:    1,
+		TotalSegments: 1,
+		Status:        TaskStatusDeleted,
+	}
+	if err := m.CreateTask(meta); err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	if err := cache.EnsureTaskDir(meta.ID); err != nil {
+		t.Fatalf("EnsureTaskDir: %v", err)
+	}
+	if err := os.WriteFile(taskProgressPath(meta.ID), []byte("{}"), 0644); err != nil {
+		t.Fatalf("WriteFile progress: %v", err)
+	}
+
+	m.deleteTaskAsync(meta.ID)
+
+	if multicallCount != 1 {
+		t.Fatalf("system.multicall count = %d, want 1", multicallCount)
+	}
+	if !dirExistsDuringCleanup {
+		t.Fatal("task dir should still exist when aria2 cleanup starts")
+	}
+	if _, err := os.Stat(taskProgressPath(meta.ID)); !os.IsNotExist(err) {
+		t.Fatalf("progress file still exists, stat err=%v", err)
+	}
+	if _, err := os.Stat(cache.GetTaskDir(meta.ID)); !os.IsNotExist(err) {
+		t.Fatalf("task dir still exists, stat err=%v", err)
+	}
+	if _, err := m.GetTask(meta.ID); err == nil {
+		t.Fatal("task should be removed from db")
 	}
 }

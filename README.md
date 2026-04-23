@@ -102,7 +102,7 @@ For long-running deployments, set a reasonable `max-download-result` to avoid un
 
 The current `v3` implementation also does the following automatically:
 
-- delays cleanup for `completed / failed / deleted` tasks and then clears aria2 entries by task directory
+- clears aria2 entries by task directory during async delete for `deleted` tasks
 - runs a low-frequency `purgeDownloadResult()` fallback every day at `03:00`
 
 ### Step 2: Start HLS Accelerator
