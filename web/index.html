@@ -39,9 +39,9 @@
                 max(14px, env(safe-area-inset-left));
         }
 
-        /* 为底部悬浮「新建任务」留出滚动到底时的可视空隙 */
+        /* 为底部「新建任务」胶囊留出滚动空隙 */
         .shell {
-            padding-bottom: calc(72px + env(safe-area-inset-bottom, 0px));
+            padding-bottom: calc(76px + env(safe-area-inset-bottom, 0px));
         }
 
         .top {
@@ -233,6 +233,7 @@
             flex-direction: column;
             gap: 10px;
             margin-bottom: 14px;
+            position: relative;
         }
 
         .list-head h2 {
@@ -242,7 +243,26 @@
         }
 
         select.filter {
+            width: 100%;
             min-height: var(--tap);
+            padding: 10px 36px 10px 14px;
+            border: 1px solid var(--line);
+            border-radius: var(--radius-sm);
+            background-color: #fafafa;
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath fill='%236b7280' d='M1 1.5L6 6l5-4.5' stroke='%236b7280' stroke-width='1.2' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+            background-repeat: no-repeat;
+            background-position: right 14px center;
+            font-size: 15px;
+            color: var(--ink);
+            cursor: pointer;
+            appearance: none;
+            -webkit-appearance: none;
+        }
+
+        select.filter:focus {
+            outline: 2px solid var(--primary-weak);
+            border-color: var(--primary);
+            background-color: var(--surface);
         }
 
         .task-list { display: flex; flex-direction: column; gap: 12px; }
@@ -264,21 +284,20 @@
             padding-right: 10px;
         }
 
-        /* 右侧固定条：代理播放（整卡高度可点） */
+        /* 右侧代理播放：与列表同色、无竖线分割 */
         .task-play-zone {
             flex-shrink: 0;
-            width: 52px;
+            width: 64px;
             margin: -14px 0 -14px 0;
-            padding: 8px 6px;
+            padding: 10px 8px;
             align-self: stretch;
             display: flex;
             flex-direction: column;
             align-items: center;
             justify-content: center;
-            gap: 4px;
+            gap: 0;
             border: none;
-            border-left: 1px solid var(--line);
-            background: rgba(13, 148, 136, 0.07);
+            background: var(--surface);
             color: var(--primary);
             cursor: pointer;
             font: inherit;
@@ -287,7 +306,7 @@
         }
 
         .task-play-zone:active {
-            background: rgba(13, 148, 136, 0.16);
+            background: #f3f4f6;
         }
 
         .task-play-zone:focus-visible {
@@ -296,24 +315,45 @@
             z-index: 1;
         }
 
-        .task-play-icon {
-            font-size: 14px;
-            line-height: 1;
-            opacity: 0.95;
+        .task-play-hit {
+            width: 48px;
+            height: 48px;
+            border-radius: 50%;
+            background: transparent;
+            border: none;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: transform 0.12s ease, background 0.15s ease;
         }
 
-        .task-play-label {
-            font-size: 11px;
-            font-weight: 700;
-            letter-spacing: 0.02em;
-            line-height: 1.15;
-            text-align: center;
+        .task-play-zone:active .task-play-hit {
+            transform: scale(0.96);
+            background: #f3f4f6;
+        }
+
+        .task-play-svg {
+            width: 22px;
+            height: 22px;
+            margin-left: 3px;
+            flex-shrink: 0;
         }
 
         @media (min-width: 400px) {
             .task-play-zone {
-                width: 60px;
-                padding: 10px 8px;
+                width: 72px;
+                padding: 12px 10px;
+            }
+
+            .task-play-hit {
+                width: 52px;
+                height: 52px;
+            }
+
+            .task-play-svg {
+                width: 26px;
+                height: 26px;
+                margin-left: 4px;
             }
         }
 
@@ -496,7 +536,7 @@
             overflow: hidden;
         }
 
-        /* 列表下方固定悬浮：长列表滚动时始终可点 */
+        /* 底部悬浮：主色胶囊（与早期版本一致，略加大触控） */
         .fab-create {
             position: fixed;
             z-index: 60;
@@ -505,7 +545,7 @@
             bottom: 0;
             display: flex;
             justify-content: center;
-            padding: 8px max(14px, env(safe-area-inset-left)) max(8px, env(safe-area-inset-bottom)) max(14px, env(safe-area-inset-right));
+            padding: 8px max(14px, env(safe-area-inset-left)) max(10px, env(safe-area-inset-bottom)) max(14px, env(safe-area-inset-right));
             pointer-events: none;
             transition: opacity 0.2s ease, transform 0.22s ease;
         }
@@ -516,9 +556,9 @@
             align-items: center;
             justify-content: center;
             gap: 8px;
-            min-height: 48px;
-            padding: 0 22px;
-            max-width: min(360px, 100%);
+            min-height: 52px;
+            padding: 0 26px;
+            max-width: min(400px, 100%);
             width: auto;
             border: none;
             border-radius: 999px;
@@ -528,14 +568,16 @@
             font-weight: 700;
             cursor: pointer;
             box-shadow:
-                0 4px 14px rgba(13, 148, 136, 0.35),
+                0 4px 16px rgba(13, 148, 136, 0.38),
                 0 1px 3px rgba(0, 0, 0, 0.08);
             -webkit-tap-highlight-color: transparent;
+            transition: transform 0.15s ease, box-shadow 0.15s ease, filter 0.15s ease;
         }
 
         .fab-create-btn:active {
             transform: scale(0.98);
-            box-shadow: 0 2px 8px rgba(13, 148, 136, 0.28);
+            filter: brightness(0.96);
+            box-shadow: 0 2px 10px rgba(13, 148, 136, 0.3);
         }
 
         .fab-create-icon {
@@ -543,6 +585,7 @@
             font-weight: 400;
             line-height: 1;
             margin-top: -1px;
+            opacity: 0.95;
         }
 
         body.modal-open .fab-create {
@@ -638,7 +681,7 @@
             .shell {
                 max-width: 720px;
                 margin: 0 auto;
-                padding-bottom: calc(76px + env(safe-area-inset-bottom, 0px));
+                padding-bottom: calc(80px + env(safe-area-inset-bottom, 0px));
             }
 
             .metrics-rail {
@@ -673,7 +716,14 @@
                 align-items: center;
                 justify-content: space-between;
             }
-            .list-head select.filter { max-width: 220px; }
+
+            select.filter {
+                width: auto;
+                min-width: 200px;
+                max-width: 280px;
+                margin-left: auto;
+            }
+
             .task-btns {
                 flex-direction: row;
                 flex-wrap: wrap;
@@ -898,6 +948,7 @@
                 closeCreateModal();
             }
         });
+
         el.statusFilter.addEventListener('change', () => {
             state.taskFilter = el.statusFilter.value;
             updateStats();
@@ -1044,6 +1095,9 @@
             if (totalLabel) totalLabel.textContent = state.taskFilter ? '本筛选' : '全部';
             if (activeLabel) activeLabel.textContent = '进行中';
             updateMetricsRail();
+            if (el.statusFilter && el.statusFilter.value !== state.taskFilter) {
+                el.statusFilter.value = state.taskFilter;
+            }
         }
 
         function updateMetricsRail() {
@@ -1098,8 +1152,11 @@
                             </div>
                         </div>
                         <button type="button" class="task-play-zone" data-action="play" aria-label="代理播放 M3U8" title="代理播放">
-                            <span class="task-play-icon" aria-hidden="true">▶</span>
-                            <span class="task-play-label">播放</span>
+                            <span class="task-play-hit">
+                                <svg class="task-play-svg" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                                    <path fill="currentColor" d="M9 6.5v11l9.5-5.5L9 6.5z"/>
+                                </svg>
+                            </span>
                         </button>
                     </article>
                 `;
