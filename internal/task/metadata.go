@@ -30,26 +30,24 @@ type TaskMetadata struct {
 }
 
 type TaskManifest struct {
-	TaskID        string         `json:"task_id"`
-	OriginalURL   string         `json:"original_url"`
-	TotalSegments int            `json:"total_segments"`
+	TaskID        string         `json:"tid"`
+	OriginalURL   string         `json:"src,omitempty"`
+	TotalSegments int            `json:"seg,omitempty"`
 	Items         []ManifestItem `json:"items"`
 }
 
 type ManifestItem struct {
-	Filename string `json:"filename"`
-	URL      string `json:"url"`
-	Path     string `json:"path"`
-	Type     string `json:"type"`
+	Filename string `json:"f"`
+	URL      string `json:"u"`
+	Type     string `json:"t,omitempty"`
 }
 
 type TaskProgressFile struct {
-	TaskID            string            `json:"task_id"`
-	Pending           []string          `json:"pending"`
-	Failed            map[string]string `json:"failed"`
-	DownloadedSegments int              `json:"downloaded_segments"`
-	DoneItems         int               `json:"done_items"`
-	UpdatedAt         time.Time         `json:"updated_at"`
+	TaskID             string            `json:"tid"`
+	Failed             map[string]string `json:"f,omitempty"`
+	DownloadedSegments int               `json:"seg_done,omitempty"`
+	DoneItems          int               `json:"done,omitempty"`
+	UpdatedAt          time.Time         `json:"u,omitempty"`
 }
 
 type TaskSummary struct {

@@ -24,6 +24,13 @@ import (
 
 const pausedRuntimeTTL = 10 * time.Minute
 
+const (
+	dirtyFlushTick            = 500 * time.Millisecond
+	downloadingFlushInterval  = 2 * time.Second
+	pausedFlushInterval       = 400 * time.Millisecond
+	terminalFlushInterval     = 150 * time.Millisecond
+)
+
 type Manager struct {
 	mu               sync.Mutex
 	aria2            *downloader.Aria2Client
@@ -54,6 +61,7 @@ type taskRuntime struct {
 	remainingSegments int
 	paused            bool
 	dirty             bool
+	dirtySince        time.Time
 	lastAccessAt      time.Time
 }
 
@@ -169,7 +177,7 @@ func (m *Manager) PauseTask(taskID string) (int, error) {
 	rt.paused = true
 	gids := keysOfMap(rt.gidToFile)
 	pendingCount := rt.pendingDispatchableCountLocked()
-	rt.dirty = true
+	rt.markDirtyLocked()
 	rt.mu.Unlock()
 
 	if m.aria2 != nil && len(gids) > 0 {
@@ -190,7 +198,7 @@ func (m *Manager) ResumeTask(taskID string) (int, error) {
 	rt.paused = false
 	gids := keysOfMap(rt.gidToFile)
 	count := rt.pendingDispatchableCountLocked() + len(gids)
-	rt.dirty = true
+	rt.markDirtyLocked()
 	rt.mu.Unlock()
 
 	if m.aria2 != nil && len(gids) > 0 {
@@ -212,7 +220,7 @@ func (m *Manager) RetryTask(taskID string) (int, error) {
 	count := len(rt.failed)
 	rt.failed = make(map[string]string)
 	rt.paused = false
-	rt.dirty = true
+	rt.markDirtyLocked()
 	rt.mu.Unlock()
 
 	if err := m.flushRuntime(taskID, rt); err != nil {
@@ -411,7 +419,7 @@ func (m *Manager) applyAria2Event(event aria2NotificationEvent) {
 }
 
 func (m *Manager) flushDirtyLoop() {
-	ticker := time.NewTicker(time.Second)
+	ticker := time.NewTicker(dirtyFlushTick)
 	defer ticker.Stop()
 	for range ticker.C {
 		m.runtimeMu.Lock()
@@ -425,10 +433,7 @@ func (m *Manager) flushDirtyLoop() {
 			if err != nil {
 				continue
 			}
-			rt.mu.Lock()
-			dirty := rt.dirty
-			rt.mu.Unlock()
-			if dirty {
+			if rt.shouldFlush(time.Now()) {
 				_ = m.flushRuntime(taskID, rt)
 			}
 		}
@@ -538,7 +543,9 @@ func (m *Manager) ReconcileTask(taskID string) (int, error) {
 			}
 		}
 	}
-	_ = m.flushRuntime(taskID, rt)
+	if updated > 0 || rt.shouldFlush(time.Now()) {
+		_ = m.flushRuntime(taskID, rt)
+	}
 	return updated, nil
 }
 
@@ -638,7 +645,6 @@ func (m *Manager) markCompletedByFilename(taskID, filename string) bool {
 	if !rt.markCompleted(filename) {
 		return false
 	}
-	_ = m.flushRuntime(taskID, rt)
 	return true
 }
 
@@ -650,7 +656,6 @@ func (m *Manager) markFailedByFilename(taskID, filename, errMsg string) bool {
 	if !rt.markFailed(filename, errMsg) {
 		return false
 	}
-	_ = m.flushRuntime(taskID, rt)
 	return true
 }
 
@@ -802,7 +807,6 @@ func buildManifest(taskID, originalURL string, items []playlist.DownloadItem, to
 		manifestItems = append(manifestItems, ManifestItem{
 			Filename: item.Filename,
 			URL:      item.URL,
-			Path:     cache.GetFilePath(taskID, item.Filename),
 			Type:     normalizeManifestType(item.Type),
 		})
 	}
@@ -815,42 +819,20 @@ func buildManifest(taskID, originalURL string, items []playlist.DownloadItem, to
 }
 
 func buildInitialProgress(manifest TaskManifest) TaskProgressFile {
-	pending := make([]string, 0, len(manifest.Items))
-	for _, item := range manifest.Items {
-		pending = append(pending, item.Filename)
-	}
 	return TaskProgressFile{
 		TaskID:    manifest.TaskID,
-		Pending:   pending,
 		Failed:    map[string]string{},
 		UpdatedAt: time.Now(),
 	}
 }
 
 func newTaskRuntime(manifest TaskManifest, progress TaskProgressFile, paused bool) *taskRuntime {
-	itemMap := make(map[string]ManifestItem, len(manifest.Items))
-	for _, item := range manifest.Items {
-		itemMap[item.Filename] = item
-	}
-	remaining := make(map[string]ManifestItem, len(progress.Pending)+len(progress.Failed))
+	remaining := make(map[string]ManifestItem, len(manifest.Items))
 	remainingSegments := 0
-	for _, filename := range progress.Pending {
-		if item, ok := itemMap[filename]; ok {
-			remaining[filename] = item
-			if item.Type != "key" {
-				remainingSegments++
-			}
-		}
-	}
-	for filename := range progress.Failed {
-		if _, ok := remaining[filename]; ok {
-			continue
-		}
-		if item, ok := itemMap[filename]; ok {
-			remaining[filename] = item
-			if item.Type != "key" {
-				remainingSegments++
-			}
+	for _, item := range manifest.Items {
+		remaining[item.Filename] = item
+		if item.Type != "key" {
+			remainingSegments++
 		}
 	}
 	return &taskRuntime{
@@ -863,6 +845,7 @@ func newTaskRuntime(manifest TaskManifest, progress TaskProgressFile, paused boo
 		remainingSegments: remainingSegments,
 		paused:            paused,
 		dirty:             false,
+		dirtySince:        time.Time{},
 		lastAccessAt:      time.Now(),
 	}
 }
@@ -878,7 +861,7 @@ func (rt *taskRuntime) syncCompletedFiles(taskID string) {
 			if item.Type != "key" && rt.remainingSegments > 0 {
 				rt.remainingSegments--
 			}
-			rt.dirty = true
+			rt.markDirtyLocked()
 		}
 	}
 }
@@ -917,7 +900,7 @@ func (rt *taskRuntime) bindGID(filename, gid string) bool {
 	delete(rt.dispatching, filename)
 	rt.gidToFile[gid] = filename
 	rt.fileToGID[filename] = gid
-	rt.dirty = true
+	rt.markDirtyLocked()
 	return rt.paused
 }
 
@@ -950,7 +933,7 @@ func (rt *taskRuntime) markCompleted(filename string) bool {
 	if item.Type != "key" && rt.remainingSegments > 0 {
 		rt.remainingSegments--
 	}
-	rt.dirty = true
+	rt.markDirtyLocked()
 	return true
 }
 
@@ -967,7 +950,7 @@ func (rt *taskRuntime) markFailed(filename, errMsg string) bool {
 		delete(rt.gidToFile, gid)
 	}
 	rt.failed[filename] = errMsg
-	rt.dirty = true
+	rt.markDirtyLocked()
 	return true
 }
 
@@ -1010,10 +993,6 @@ func (rt *taskRuntime) snapshot() (TaskProgressFile, runtimeSnapshot) {
 	defer rt.mu.Unlock()
 	rt.lastAccessAt = time.Now()
 
-	pending := make([]string, 0, len(rt.remaining))
-	for filename := range rt.remaining {
-		pending = append(pending, filename)
-	}
 	doneItems := len(rt.manifest.Items) - len(rt.remaining)
 	downloadedSegments := rt.manifest.TotalSegments - rt.remainingSegments
 	failedItems := len(rt.failed)
@@ -1029,7 +1008,6 @@ func (rt *taskRuntime) snapshot() (TaskProgressFile, runtimeSnapshot) {
 
 	progress := TaskProgressFile{
 		TaskID:             rt.manifest.TaskID,
-		Pending:            pending,
 		Failed:             cloneFailedMap(rt.failed),
 		DownloadedSegments: downloadedSegments,
 		DoneItems:          doneItems,
@@ -1047,6 +1025,7 @@ func (rt *taskRuntime) markClean() {
 	rt.mu.Lock()
 	defer rt.mu.Unlock()
 	rt.dirty = false
+	rt.dirtySince = time.Time{}
 	rt.lastAccessAt = time.Now()
 }
 
@@ -1069,6 +1048,34 @@ func (rt *taskRuntime) stateForEviction() (string, time.Time, bool) {
 		status = TaskStatusFailed
 	}
 	return status, rt.lastAccessAt, rt.dirty
+}
+
+func (rt *taskRuntime) shouldFlush(now time.Time) bool {
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	if !rt.dirty {
+		return false
+	}
+	if rt.dirtySince.IsZero() {
+		rt.dirtySince = now
+	}
+	wait := downloadingFlushInterval
+	switch {
+	case len(rt.remaining) == 0:
+		wait = terminalFlushInterval
+	case rt.paused:
+		wait = pausedFlushInterval
+	case len(rt.failed) > 0 && len(rt.failed) == len(rt.remaining) && len(rt.fileToGID) == 0 && len(rt.dispatching) == 0:
+		wait = terminalFlushInterval
+	}
+	return now.Sub(rt.dirtySince) >= wait
+}
+
+func (rt *taskRuntime) markDirtyLocked() {
+	if !rt.dirty {
+		rt.dirtySince = time.Now()
+	}
+	rt.dirty = true
 }
 
 func taskManifestPath(taskID string) string {
@@ -1111,7 +1118,7 @@ func writeJSONAtomic(path string, value interface{}) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return err
 	}
-	data, err := json.MarshalIndent(value, "", "  ")
+	data, err := json.Marshal(value)
 	if err != nil {
 		return err
 	}

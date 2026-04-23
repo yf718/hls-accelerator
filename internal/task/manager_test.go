@@ -28,9 +28,6 @@ func TestBuildManifestDeduplicatesByFilenameAndPreservesLastEntry(t *testing.T) 
 	if manifest.Items[0].URL != "https://example.com/old.ts" {
 		t.Fatalf("first duplicate entry should keep first-seen position, got %q", manifest.Items[0].URL)
 	}
-	if manifest.Items[0].Path != cache.GetFilePath(taskID, "00001.ts") {
-		t.Fatalf("path = %q, want %q", manifest.Items[0].Path, cache.GetFilePath(taskID, "00001.ts"))
-	}
 	if manifest.Items[1].Type != "key" {
 		t.Fatalf("type = %q, want key", manifest.Items[1].Type)
 	}
@@ -206,5 +203,41 @@ func TestCleanupInactiveRuntimesEvictsPausedButKeepsDownloading(t *testing.T) {
 	}
 	if !downloadingExists {
 		t.Fatal("downloading runtime should stay resident")
+	}
+}
+
+func TestProgressSnapshotUsesCompactFailedOnlyFormat(t *testing.T) {
+	manifest := TaskManifest{
+		TaskID:        "task-progress",
+		TotalSegments: 2,
+		Items: []ManifestItem{
+			{Filename: "00001.ts", Type: "segment"},
+			{Filename: "00002.ts", Type: "segment"},
+		},
+	}
+	rt := newTaskRuntime(manifest, buildInitialProgress(manifest), false)
+
+	if !rt.markCompleted("00001.ts") {
+		t.Fatal("expected first item to complete")
+	}
+	if !rt.markFailed("00002.ts", "boom") {
+		t.Fatal("expected second item to fail")
+	}
+
+	progress, snapshot := rt.snapshot()
+	if progress.TaskID != manifest.TaskID {
+		t.Fatalf("task id = %q, want %q", progress.TaskID, manifest.TaskID)
+	}
+	if len(progress.Failed) != 1 || progress.Failed["00002.ts"] != "boom" {
+		t.Fatalf("failed map = %#v, want only failed item", progress.Failed)
+	}
+	if progress.DoneItems != 1 {
+		t.Fatalf("done_items = %d, want 1", progress.DoneItems)
+	}
+	if progress.DownloadedSegments != 1 {
+		t.Fatalf("downloaded_segments = %d, want 1", progress.DownloadedSegments)
+	}
+	if snapshot.Status != TaskStatusFailed {
+		t.Fatalf("status = %q, want %q", snapshot.Status, TaskStatusFailed)
 	}
 }
