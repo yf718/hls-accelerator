@@ -53,8 +53,8 @@ type aria2NotificationEvent struct {
 type taskRuntime struct {
 	mu                sync.Mutex
 	manifest          TaskManifest
-	remaining         map[string]ManifestItem
-	failed            map[string]string
+	remaining         map[string]uint32
+	failed            map[string]struct{}
 	dispatching       map[string]struct{}
 	gidToFile         map[string]string
 	fileToGID         map[string]string
@@ -106,12 +106,11 @@ func (m *Manager) CreateTaskWithItems(meta TaskMetadata, items []playlist.Downlo
 		return created, err
 	}
 
-	if err := writeJSONAtomic(taskManifestPath(meta.ID), manifest); err != nil {
+	if err := m.SaveTaskManifest(manifest); err != nil {
 		_ = m.DeleteTaskDB(meta.ID)
 		return false, err
 	}
 	if err := writeJSONAtomic(taskProgressPath(meta.ID), progress); err != nil {
-		_ = os.Remove(taskManifestPath(meta.ID))
 		_ = m.DeleteTaskDB(meta.ID)
 		return false, err
 	}
@@ -218,7 +217,7 @@ func (m *Manager) RetryTask(taskID string) (int, error) {
 	}
 	rt.mu.Lock()
 	count := len(rt.failed)
-	rt.failed = make(map[string]string)
+	rt.failed = make(map[string]struct{})
 	rt.paused = false
 	rt.markDirtyLocked()
 	rt.mu.Unlock()
@@ -251,7 +250,6 @@ func (m *Manager) deleteTaskAsync(taskID string) {
 		_, _ = m.aria2.ForceRemoveTaskDownloads(cache.GetTaskDir(taskID))
 		_ = m.aria2.PurgeDownloadResult()
 	}
-	_ = os.Remove(taskManifestPath(taskID))
 	_ = os.Remove(taskProgressPath(taskID))
 	_ = os.RemoveAll(cache.GetTaskDir(taskID))
 	_ = m.DeleteTaskDB(taskID)
@@ -558,15 +556,15 @@ func (m *Manager) loadRuntime(taskID string) (*taskRuntime, error) {
 	}
 	m.runtimeMu.Unlock()
 
-	manifest, err := readManifest(taskManifestPath(taskID))
+	meta, err := m.GetTask(taskID)
+	if err != nil {
+		return nil, err
+	}
+	manifest, err := m.LoadTaskManifest(taskID, meta.OriginalURL, meta.TotalSegments)
 	if err != nil {
 		return nil, err
 	}
 	progress, err := readProgress(taskProgressPath(taskID), manifest)
-	if err != nil {
-		return nil, err
-	}
-	meta, err := m.GetTask(taskID)
 	if err != nil {
 		return nil, err
 	}
@@ -821,16 +819,16 @@ func buildManifest(taskID, originalURL string, items []playlist.DownloadItem, to
 func buildInitialProgress(manifest TaskManifest) TaskProgressFile {
 	return TaskProgressFile{
 		TaskID:    manifest.TaskID,
-		Failed:    map[string]string{},
+		Failed:    []string{},
 		UpdatedAt: time.Now(),
 	}
 }
 
 func newTaskRuntime(manifest TaskManifest, progress TaskProgressFile, paused bool) *taskRuntime {
-	remaining := make(map[string]ManifestItem, len(manifest.Items))
+	remaining := make(map[string]uint32, len(manifest.Items))
 	remainingSegments := 0
-	for _, item := range manifest.Items {
-		remaining[item.Filename] = item
+	for idx, item := range manifest.Items {
+		remaining[item.Filename] = uint32(idx)
 		if item.Type != "key" {
 			remainingSegments++
 		}
@@ -838,7 +836,7 @@ func newTaskRuntime(manifest TaskManifest, progress TaskProgressFile, paused boo
 	return &taskRuntime{
 		manifest:          manifest,
 		remaining:         remaining,
-		failed:            cloneFailedMap(progress.Failed),
+		failed:            failedSet(progress.Failed),
 		dispatching:       make(map[string]struct{}),
 		gidToFile:         make(map[string]string),
 		fileToGID:         make(map[string]string),
@@ -854,10 +852,11 @@ func (rt *taskRuntime) syncCompletedFiles(taskID string) {
 	rt.mu.Lock()
 	defer rt.mu.Unlock()
 	rt.lastAccessAt = time.Now()
-	for filename, item := range rt.remaining {
+	for filename, index := range rt.remaining {
 		if cache.FileExists(taskID, filename) && !cache.FileExists(taskID, filename+".aria2") {
 			delete(rt.remaining, filename)
 			delete(rt.failed, filename)
+			item := rt.manifest.Items[index]
 			if item.Type != "key" && rt.remainingSegments > 0 {
 				rt.remainingSegments--
 			}
@@ -874,7 +873,7 @@ func (rt *taskRuntime) claimPending(limit int) []ManifestItem {
 		return nil
 	}
 	items := make([]ManifestItem, 0, limit)
-	for filename, item := range rt.remaining {
+	for filename, index := range rt.remaining {
 		if len(items) >= limit {
 			break
 		}
@@ -888,7 +887,7 @@ func (rt *taskRuntime) claimPending(limit int) []ManifestItem {
 			continue
 		}
 		rt.dispatching[filename] = struct{}{}
-		items = append(items, item)
+		items = append(items, rt.manifest.Items[index])
 	}
 	return items
 }
@@ -919,7 +918,7 @@ func (rt *taskRuntime) markCompleted(filename string) bool {
 	rt.mu.Lock()
 	defer rt.mu.Unlock()
 	rt.lastAccessAt = time.Now()
-	item, ok := rt.remaining[filename]
+	index, ok := rt.remaining[filename]
 	if !ok {
 		return false
 	}
@@ -930,6 +929,7 @@ func (rt *taskRuntime) markCompleted(filename string) bool {
 		delete(rt.fileToGID, filename)
 		delete(rt.gidToFile, gid)
 	}
+	item := rt.manifest.Items[index]
 	if item.Type != "key" && rt.remainingSegments > 0 {
 		rt.remainingSegments--
 	}
@@ -949,7 +949,7 @@ func (rt *taskRuntime) markFailed(filename, errMsg string) bool {
 		delete(rt.fileToGID, filename)
 		delete(rt.gidToFile, gid)
 	}
-	rt.failed[filename] = errMsg
+	rt.failed[filename] = struct{}{}
 	rt.markDirtyLocked()
 	return true
 }
@@ -975,8 +975,8 @@ func (rt *taskRuntime) remainingItemsSnapshot() []ManifestItem {
 	rt.mu.Lock()
 	defer rt.mu.Unlock()
 	items := make([]ManifestItem, 0, len(rt.remaining))
-	for _, item := range rt.remaining {
-		items = append(items, item)
+	for _, index := range rt.remaining {
+		items = append(items, rt.manifest.Items[index])
 	}
 	return items
 }
@@ -1008,7 +1008,7 @@ func (rt *taskRuntime) snapshot() (TaskProgressFile, runtimeSnapshot) {
 
 	progress := TaskProgressFile{
 		TaskID:             rt.manifest.TaskID,
-		Failed:             cloneFailedMap(rt.failed),
+		Failed:             failedNames(rt.failed),
 		DownloadedSegments: downloadedSegments,
 		DoneItems:          doneItems,
 		UpdatedAt:          time.Now(),
@@ -1078,22 +1078,8 @@ func (rt *taskRuntime) markDirtyLocked() {
 	rt.dirty = true
 }
 
-func taskManifestPath(taskID string) string {
-	return filepath.Join(cache.GetTaskDir(taskID), "manifest.json")
-}
-
 func taskProgressPath(taskID string) string {
 	return filepath.Join(cache.GetTaskDir(taskID), "progress.json")
-}
-
-func readManifest(path string) (TaskManifest, error) {
-	var manifest TaskManifest
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return manifest, err
-	}
-	err = json.Unmarshal(data, &manifest)
-	return manifest, err
 }
 
 func readProgress(path string, manifest TaskManifest) (TaskProgressFile, error) {
@@ -1109,7 +1095,7 @@ func readProgress(path string, manifest TaskManifest) (TaskProgressFile, error) 
 		return progress, err
 	}
 	if progress.Failed == nil {
-		progress.Failed = map[string]string{}
+		progress.Failed = []string{}
 	}
 	return progress, nil
 }
@@ -1138,10 +1124,21 @@ func defaultHeaders() map[string]string {
 	return config.GlobalConfig.Headers
 }
 
-func cloneFailedMap(in map[string]string) map[string]string {
-	out := make(map[string]string, len(in))
-	for key, value := range in {
-		out[key] = value
+func failedSet(names []string) map[string]struct{} {
+	out := make(map[string]struct{}, len(names))
+	for _, name := range names {
+		if strings.TrimSpace(name) == "" {
+			continue
+		}
+		out[name] = struct{}{}
+	}
+	return out
+}
+
+func failedNames(in map[string]struct{}) []string {
+	out := make([]string, 0, len(in))
+	for key := range in {
+		out = append(out, key)
 	}
 	return out
 }

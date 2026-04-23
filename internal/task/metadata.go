@@ -44,7 +44,7 @@ type ManifestItem struct {
 
 type TaskProgressFile struct {
 	TaskID             string            `json:"tid"`
-	Failed             map[string]string `json:"f,omitempty"`
+	Failed             []string          `json:"f,omitempty"`
 	DownloadedSegments int               `json:"seg_done,omitempty"`
 	DoneItems          int               `json:"done,omitempty"`
 	UpdatedAt          time.Time         `json:"u,omitempty"`

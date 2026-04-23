@@ -157,8 +157,8 @@ func TestCleanupInactiveRuntimesEvictsPausedButKeepsDownloading(t *testing.T) {
 		{Filename: "00001.ts", URL: "https://example.com/paused-1.ts", Type: "segment"},
 	}, 1)
 	pausedProgress := buildInitialProgress(pausedManifest)
-	if err := writeJSONAtomic(taskManifestPath(pausedMeta.ID), pausedManifest); err != nil {
-		t.Fatalf("write paused manifest: %v", err)
+	if err := m.SaveTaskManifest(pausedManifest); err != nil {
+		t.Fatalf("save paused manifest: %v", err)
 	}
 	if err := writeJSONAtomic(taskProgressPath(pausedMeta.ID), pausedProgress); err != nil {
 		t.Fatalf("write paused progress: %v", err)
@@ -168,8 +168,8 @@ func TestCleanupInactiveRuntimesEvictsPausedButKeepsDownloading(t *testing.T) {
 		{Filename: "00001.ts", URL: "https://example.com/downloading-1.ts", Type: "segment"},
 	}, 1)
 	downloadingProgress := buildInitialProgress(downloadingManifest)
-	if err := writeJSONAtomic(taskManifestPath(downloadingMeta.ID), downloadingManifest); err != nil {
-		t.Fatalf("write downloading manifest: %v", err)
+	if err := m.SaveTaskManifest(downloadingManifest); err != nil {
+		t.Fatalf("save downloading manifest: %v", err)
 	}
 	if err := writeJSONAtomic(taskProgressPath(downloadingMeta.ID), downloadingProgress); err != nil {
 		t.Fatalf("write downloading progress: %v", err)
@@ -228,8 +228,8 @@ func TestProgressSnapshotUsesCompactFailedOnlyFormat(t *testing.T) {
 	if progress.TaskID != manifest.TaskID {
 		t.Fatalf("task id = %q, want %q", progress.TaskID, manifest.TaskID)
 	}
-	if len(progress.Failed) != 1 || progress.Failed["00002.ts"] != "boom" {
-		t.Fatalf("failed map = %#v, want only failed item", progress.Failed)
+	if len(progress.Failed) != 1 || progress.Failed[0] != "00002.ts" {
+		t.Fatalf("failed list = %#v, want only failed item name", progress.Failed)
 	}
 	if progress.DoneItems != 1 {
 		t.Fatalf("done_items = %d, want 1", progress.DoneItems)
@@ -239,5 +239,25 @@ func TestProgressSnapshotUsesCompactFailedOnlyFormat(t *testing.T) {
 	}
 	if snapshot.Status != TaskStatusFailed {
 		t.Fatalf("status = %q, want %q", snapshot.Status, TaskStatusFailed)
+	}
+}
+
+func TestNewTaskRuntimeStoresRemainingAsManifestIndexes(t *testing.T) {
+	manifest := TaskManifest{
+		TaskID: "task-index-map",
+		Items: []ManifestItem{
+			{Filename: "00001.ts", URL: "https://example.com/1.ts", Type: "segment"},
+			{Filename: "00002.ts", URL: "https://example.com/2.ts", Type: "segment"},
+		},
+	}
+
+	rt := newTaskRuntime(manifest, buildInitialProgress(manifest), false)
+
+	index, ok := rt.remaining["00002.ts"]
+	if !ok {
+		t.Fatal("expected remaining entry for 00002.ts")
+	}
+	if got := rt.manifest.Items[index].URL; got != "https://example.com/2.ts" {
+		t.Fatalf("manifest lookup url = %q, want %q", got, "https://example.com/2.ts")
 	}
 }
