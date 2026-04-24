@@ -7,266 +7,334 @@
     <title>HLS 下载</title>
     <style>
         :root {
-            --bg: #f3f4f6;
-            --surface: #fff;
-            --ink: #111827;
-            --muted: #6b7280;
+            --bg: #f0f2f5;
+            --bg-gradient: linear-gradient(160deg, #e8ecf1 0%, #f0f2f5 30%, #f8f9fb 60%, #eef1f5 100%);
+            --surface: #ffffff;
+            --surface-glass: rgba(255, 255, 255, 0.72);
+            --surface-elevated: #ffffff;
+            --ink: #1a1d23;
+            --ink-secondary: #4b5563;
+            --muted: #9ca3af;
             --line: #e5e7eb;
+            --line-strong: #d1d5db;
             --primary: #0d9488;
-            --primary-weak: rgba(13, 148, 136, 0.12);
+            --primary-hover: #0f766e;
+            --primary-glow: rgba(13, 148, 136, 0.25);
+            --primary-weak: rgba(13, 148, 136, 0.1);
             --warn: #d97706;
+            --warn-weak: rgba(217, 119, 6, 0.1);
             --danger: #dc2626;
-            --ok: #16a34a;
-            --radius: 14px;
-            --radius-sm: 10px;
+            --danger-weak: rgba(220, 38, 38, 0.1);
+            --ok: #10b981;
+            --ok-weak: rgba(16, 185, 129, 0.1);
+            --shimmer: rgba(255, 255, 255, 0.55);
+            --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.04);
+            --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.06), 0 1px 3px rgba(0, 0, 0, 0.04);
+            --shadow-lg: 0 12px 36px rgba(0, 0, 0, 0.1), 0 2px 8px rgba(0, 0, 0, 0.05);
+            --shadow-glow: 0 0 0 6px var(--primary-glow);
+            --radius: 16px;
+            --radius-sm: 11px;
+            --radius-xs: 8px;
             --tap: 44px;
+            --font-mono: ui-monospace, "Cascadia Code", "Consolas", "SF Mono", monospace;
+            --backdrop: blur(18px) saturate(1.4);
+            --transition-fast: 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+            --transition-smooth: 0.25s cubic-bezier(0.4, 0, 0.2, 1);
         }
 
-        * { box-sizing: border-box; }
-        html { -webkit-text-size-adjust: 100%; }
+        body.dark {
+            --bg: #0f1117;
+            --bg-gradient: linear-gradient(160deg, #0f1117 0%, #13161d 30%, #161920 60%, #111318 100%);
+            --surface: #1a1d25;
+            --surface-glass: rgba(26, 29, 37, 0.78);
+            --surface-elevated: #1f222b;
+            --ink: #e8eaef;
+            --ink-secondary: #a0a7b5;
+            --muted: #6b7280;
+            --line: #2a2d36;
+            --line-strong: #353841;
+            --primary: #2dd4bf;
+            --primary-hover: #5eead4;
+            --primary-glow: rgba(45, 212, 191, 0.2);
+            --primary-weak: rgba(45, 212, 191, 0.1);
+            --warn: #f59e0b;
+            --warn-weak: rgba(245, 158, 11, 0.12);
+            --danger: #f87171;
+            --danger-weak: rgba(248, 113, 113, 0.12);
+            --ok: #34d399;
+            --ok-weak: rgba(52, 211, 153, 0.1);
+            --shimmer: rgba(255, 255, 255, 0.06);
+            --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.2);
+            --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.25), 0 1px 3px rgba(0, 0, 0, 0.15);
+            --shadow-lg: 0 12px 36px rgba(0, 0, 0, 0.35), 0 2px 8px rgba(0, 0, 0, 0.2);
+            --shadow-glow: 0 0 0 8px var(--primary-glow);
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+        html {
+            -webkit-text-size-adjust: 100%;
+        }
 
         body {
             margin: 0;
             font-family: system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
             font-size: 15px;
-            line-height: 1.45;
+            line-height: 1.5;
             color: var(--ink);
             background: var(--bg);
-            padding:
-                max(12px, env(safe-area-inset-top))
-                max(14px, env(safe-area-inset-right))
-                max(12px, env(safe-area-inset-bottom))
-                max(14px, env(safe-area-inset-left));
+            background-image: var(--bg-gradient);
+            min-height: 100dvh;
+            padding: max(12px, env(safe-area-inset-top)) max(14px, env(safe-area-inset-right)) max(12px, env(safe-area-inset-bottom)) max(14px, env(safe-area-inset-left));
+            transition: background 0.3s ease, color 0.3s ease;
+            position: relative;
+            overflow-x: hidden;
         }
 
-        /* 为底部「新建任务」胶囊留出滚动空隙 */
+        body::before {
+            content: '';
+            position: fixed;
+            inset: 0;
+            pointer-events: none;
+            z-index: 0;
+            opacity: 0.35;
+            background:
+                radial-gradient(ellipse 60% 40% at 20% 15%, var(--primary-glow) 0%, transparent 70%),
+                radial-gradient(ellipse 50% 35% at 75% 80%, rgba(99, 102, 241, 0.07) 0%, transparent 70%),
+                radial-gradient(ellipse 40% 30% at 60% 20%, rgba(236, 72, 153, 0.04) 0%, transparent 65%);
+            transition: opacity 0.3s ease;
+        }
+        body.dark::before {
+            opacity: 0.5;
+        }
+
         .shell {
-            padding-bottom: calc(76px + env(safe-area-inset-bottom, 0px));
+            position: relative;
+            z-index: 1;
+            padding-bottom: calc(80px + env(safe-area-inset-bottom, 0px));
+            max-width: 720px;
+            margin: 0 auto;
         }
 
+        /* ── 顶栏 ── */
         .top {
             display: flex;
             align-items: center;
             justify-content: space-between;
-            gap: 12px;
+            gap: 10px;
             margin-bottom: 14px;
+            flex-wrap: wrap;
         }
-
         .top h1 {
             margin: 0;
-            font-size: 1.25rem;
-            font-weight: 700;
-            letter-spacing: -0.02em;
+            font-size: 1.35rem;
+            font-weight: 750;
+            letter-spacing: -0.025em;
+            background: linear-gradient(135deg, var(--primary), #6366f1);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
         }
-
+        body.dark .top h1 {
+            background: linear-gradient(135deg, #2dd4bf, #818cf8);
+            -webkit-background-clip: text;
+            background-clip: text;
+        }
         .top-actions {
             display: flex;
-            gap: 8px;
+            gap: 6px;
             flex-shrink: 0;
+            align-items: center;
         }
-
         .icon-btn {
             min-width: var(--tap);
             min-height: var(--tap);
-            padding: 0 12px;
-            border-radius: var(--radius-sm);
+            padding: 0 14px;
+            border-radius: var(--radius-xs);
             border: 1px solid var(--line);
-            background: var(--surface);
-            color: var(--ink);
+            background: var(--surface-glass);
+            backdrop-filter: var(--backdrop);
+            -webkit-backdrop-filter: var(--backdrop);
+            color: var(--ink-secondary);
             font-size: 13px;
+            font-weight: 600;
             cursor: pointer;
             display: inline-flex;
             align-items: center;
             justify-content: center;
+            gap: 5px;
+            transition: all var(--transition-fast);
+            white-space: nowrap;
+        }
+        .icon-btn:hover {
+            border-color: var(--primary);
+            color: var(--primary);
+            background: var(--primary-weak);
+            box-shadow: var(--shadow-sm);
+        }
+        .icon-btn:active {
+            transform: scale(0.96);
+            opacity: 0.85;
+        }
+        .icon-btn:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+            transform: none;
+        }
+        .theme-toggle {
+            font-size: 18px;
+            min-width: 40px;
+            padding: 0;
+            border-radius: 50%;
+            aspect-ratio: 1;
+            line-height: 1;
         }
 
-        .icon-btn:active { opacity: 0.85; }
-        .icon-btn:disabled { opacity: 0.45; }
-
-        .stats {
-            display: flex;
-            gap: 8px;
-            margin-bottom: 14px;
-            overflow-x: auto;
-            -webkit-overflow-scrolling: touch;
-            padding-bottom: 2px;
-        }
-
-        .stats::-webkit-scrollbar { display: none; }
-
+        /* ── 指标面板 ── */
         .metrics-rail {
             font-size: 11px;
             color: var(--muted);
-            background: rgba(255, 255, 255, 0.65);
+            background: var(--surface-glass);
+            backdrop-filter: var(--backdrop);
+            -webkit-backdrop-filter: var(--backdrop);
             border: 1px solid var(--line);
             border-radius: var(--radius-sm);
-            padding: 6px 8px 7px;
-            margin-bottom: 8px;
+            padding: 8px 12px;
+            margin-bottom: 10px;
+            transition: all var(--transition-smooth);
         }
-
         .metrics-rail-items {
             display: flex;
             flex-wrap: wrap;
-            gap: 6px 12px;
+            gap: 6px 14px;
         }
-
         .metric-item {
             display: flex;
             flex-direction: column;
-            gap: 0;
+            gap: 1px;
             min-width: 0;
         }
-
-        .metric-item .metric-k {
+        .metric-k {
             font-size: 10px;
             color: var(--muted);
             white-space: nowrap;
-            line-height: 1.25;
+            letter-spacing: 0.02em;
+            text-transform: uppercase;
         }
-
-        .metric-item .metric-v {
+        .metric-v {
             font-size: 12px;
             font-weight: 700;
             color: var(--ink);
+            font-family: var(--font-mono);
             font-variant-numeric: tabular-nums;
-            font-family: ui-monospace, "Cascadia Code", "Consolas", monospace;
             line-height: 1.2;
         }
 
+        /* ── 统计胶囊 ── */
+        .stats {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 12px;
+            overflow-x: auto;
+            -webkit-overflow-scrolling: touch;
+            padding-bottom: 2px;
+            scrollbar-width: none;
+        }
+        .stats::-webkit-scrollbar {
+            display: none;
+        }
         .stat-pill {
             flex: 1 1 0;
             min-width: 88px;
-            padding: 10px 12px;
+            padding: 12px 14px;
             border-radius: var(--radius-sm);
-            background: var(--surface);
+            background: var(--surface-glass);
+            backdrop-filter: var(--backdrop);
+            -webkit-backdrop-filter: var(--backdrop);
             border: 1px solid var(--line);
+            text-align: center;
+            transition: all var(--transition-smooth);
+            cursor: default;
         }
-
+        .stat-pill:hover {
+            border-color: var(--primary);
+            box-shadow: var(--shadow-md);
+            transform: translateY(-1px);
+        }
         .stat-pill b {
             display: block;
-            font-size: 1.15rem;
-            line-height: 1.2;
+            font-size: 1.3rem;
+            font-weight: 750;
+            line-height: 1.1;
+            font-family: var(--font-mono);
+            font-variant-numeric: tabular-nums;
+            color: var(--primary);
         }
-
         .stat-pill span {
-            font-size: 12px;
+            font-size: 11px;
             color: var(--muted);
+            letter-spacing: 0.03em;
+            text-transform: uppercase;
         }
 
+        /* ── 卡片 ── */
         .card {
-            background: var(--surface);
+            background: var(--surface-glass);
+            backdrop-filter: var(--backdrop);
+            -webkit-backdrop-filter: var(--backdrop);
             border: 1px solid var(--line);
             border-radius: var(--radius);
             padding: 16px;
             margin-bottom: 12px;
+            box-shadow: var(--shadow-sm);
+            transition: all var(--transition-smooth);
         }
 
-        .card h2 {
-            margin: 0 0 12px;
-            font-size: 16px;
-            font-weight: 600;
-        }
-
-        label {
-            display: block;
-            font-size: 12px;
-            color: var(--muted);
-            margin-bottom: 6px;
-        }
-
-        input, select {
-            width: 100%;
-            min-height: var(--tap);
-            border: 1px solid var(--line);
-            border-radius: var(--radius-sm);
-            padding: 10px 12px;
-            font-size: 16px;
-            background: #fafafa;
-            color: var(--ink);
-        }
-
-        input:focus, select:focus {
-            outline: 2px solid var(--primary-weak);
-            border-color: var(--primary);
-            background: var(--surface);
-        }
-
-        .field { margin-bottom: 12px; }
-        .field:last-of-type { margin-bottom: 0; }
-
-        .row-actions {
-            display: grid;
-            grid-template-columns: 1fr;
-            gap: 8px;
-            margin-top: 12px;
-        }
-
-        .row-actions.modal-actions {
-            grid-template-columns: 1fr 1fr;
-        }
-
-        .btn {
-            min-height: var(--tap);
-            border: none;
-            border-radius: var(--radius-sm);
-            padding: 0 14px;
-            font-size: 15px;
-            font-weight: 600;
-            cursor: pointer;
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            -webkit-tap-highlight-color: transparent;
-        }
-
-        .btn:active { transform: scale(0.98); }
-        .btn:disabled { opacity: 0.45; cursor: not-allowed; transform: none; }
-
-        .btn-primary { background: var(--primary); color: #fff; }
-        .btn-soft { background: var(--primary-weak); color: var(--primary); }
-        .btn-warn { background: rgba(217, 119, 6, 0.12); color: var(--warn); }
-        .btn-danger { background: rgba(220, 38, 38, 0.1); color: var(--danger); }
-        .btn-ghost { background: var(--surface); color: var(--ink); border: 1px solid var(--line); }
-
+        /* ── 筛选区 ── */
         .list-head {
             display: flex;
             flex-direction: column;
             gap: 10px;
-            margin-bottom: 14px;
-            position: relative;
+            margin-bottom: 12px;
         }
-
         .list-head h2 {
             margin: 0;
             font-size: 16px;
-            font-weight: 600;
+            font-weight: 700;
+            letter-spacing: -0.01em;
         }
-
         select.filter {
             width: 100%;
             min-height: var(--tap);
-            padding: 10px 36px 10px 14px;
+            padding: 10px 38px 10px 14px;
             border: 1px solid var(--line);
-            border-radius: var(--radius-sm);
-            background-color: #fafafa;
+            border-radius: var(--radius-xs);
+            background-color: var(--surface-glass);
+            backdrop-filter: var(--backdrop);
+            -webkit-backdrop-filter: var(--backdrop);
             background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath fill='%236b7280' d='M1 1.5L6 6l5-4.5' stroke='%236b7280' stroke-width='1.2' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
             background-repeat: no-repeat;
             background-position: right 14px center;
-            font-size: 15px;
+            font-size: 14px;
             color: var(--ink);
             cursor: pointer;
             appearance: none;
             -webkit-appearance: none;
+            transition: all var(--transition-fast);
         }
-
         select.filter:focus {
-            outline: 2px solid var(--primary-weak);
+            outline: none;
             border-color: var(--primary);
-            background-color: var(--surface);
+            box-shadow: 0 0 0 3px var(--primary-weak);
         }
 
-        .task-list { display: flex; flex-direction: column; gap: 12px; }
-
+        /* ── 任务列表 ── */
+        .task-list {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
         .task {
             display: flex;
             align-items: stretch;
@@ -276,117 +344,115 @@
             border-radius: var(--radius);
             padding: 14px 0 14px 16px;
             overflow: hidden;
+            box-shadow: var(--shadow-sm);
+            transition: all var(--transition-smooth);
+            position: relative;
         }
-
+        .task:hover {
+            border-color: var(--line-strong);
+            box-shadow: var(--shadow-md);
+            transform: translateY(-1px);
+        }
         .task-main {
             flex: 1;
             min-width: 0;
-            padding-right: 10px;
+            padding-right: 8px;
         }
-
-        /* 右侧代理播放：与列表同色、无竖线分割 */
         .task-play-zone {
             flex-shrink: 0;
-            width: 64px;
-            margin: -14px 0 -14px 0;
-            padding: 10px 8px;
+            width: 60px;
+            margin: -14px 0;
+            padding: 8px 6px;
             align-self: stretch;
             display: flex;
-            flex-direction: column;
             align-items: center;
             justify-content: center;
-            gap: 0;
             border: none;
-            background: var(--surface);
+            background: transparent;
             color: var(--primary);
             cursor: pointer;
-            font: inherit;
             -webkit-tap-highlight-color: transparent;
-            transition: background 0.15s ease;
+            transition: background var(--transition-fast);
+            position: relative;
         }
-
+        .task-play-zone:hover {
+            background: var(--primary-weak);
+        }
         .task-play-zone:active {
-            background: #f3f4f6;
+            background: rgba(13, 148, 136, 0.16);
         }
-
-        .task-play-zone:focus-visible {
-            outline: 2px solid var(--primary);
-            outline-offset: -2px;
-            z-index: 1;
-        }
-
         .task-play-hit {
-            width: 48px;
-            height: 48px;
+            width: 46px;
+            height: 46px;
             border-radius: 50%;
-            background: transparent;
+            background: var(--primary-weak);
             border: none;
             display: flex;
             align-items: center;
             justify-content: center;
-            transition: transform 0.12s ease, background 0.15s ease;
+            transition: all var(--transition-fast);
+            position: relative;
         }
-
         .task-play-zone:active .task-play-hit {
-            transform: scale(0.96);
-            background: #f3f4f6;
+            transform: scale(0.9);
+            background: rgba(13, 148, 136, 0.2);
         }
-
+        body.dark .task-play-hit {
+            background: rgba(45, 212, 191, 0.12);
+        }
         .task-play-svg {
-            width: 22px;
-            height: 22px;
-            margin-left: 3px;
+            width: 20px;
+            height: 20px;
+            margin-left: 2px;
             flex-shrink: 0;
+            transition: transform var(--transition-fast);
         }
-
-        @media (min-width: 400px) {
-            .task-play-zone {
-                width: 72px;
-                padding: 12px 10px;
+        .task-play-zone:hover .task-play-svg {
+            transform: scale(1.1);
+        }
+        @keyframes playPulse {
+            0%,
+            100% {
+                box-shadow: 0 0 0 0 var(--primary-glow);
             }
-
-            .task-play-hit {
-                width: 52px;
-                height: 52px;
+            50% {
+                box-shadow: 0 0 0 10px transparent;
             }
-
-            .task-play-svg {
-                width: 26px;
-                height: 26px;
-                margin-left: 4px;
-            }
+        }
+        .task-play-hit {
+            animation: playPulse 2.4s ease-in-out infinite;
         }
 
         .task-hd {
             display: flex;
             align-items: flex-start;
             justify-content: space-between;
-            gap: 10px;
+            gap: 8px;
         }
-
         .task-name {
             margin: 0;
-            font-size: 17px;
-            font-weight: 600;
+            font-size: 16px;
+            font-weight: 650;
             word-break: break-word;
             line-height: 1.3;
+            letter-spacing: -0.01em;
         }
-
         .badge {
             flex-shrink: 0;
-            font-size: 11px;
+            font-size: 10px;
             font-weight: 700;
             text-transform: uppercase;
-            letter-spacing: 0.04em;
-            padding: 4px 8px;
+            letter-spacing: 0.05em;
+            padding: 4px 10px;
             border-radius: 999px;
-            border: 1px solid currentColor;
+            border: 1.5px solid currentColor;
             line-height: 1;
+            white-space: nowrap;
+            transition: all var(--transition-fast);
         }
-
         .task-url {
-            margin-top: 6px;
-            font-size: 13px;
+            margin-top: 4px;
+            font-size: 12px;
             color: var(--muted);
             line-height: 1.35;
             display: -webkit-box;
@@ -395,73 +461,181 @@
             overflow: hidden;
             word-break: break-all;
         }
-
         .progress {
             margin: 10px 0 6px;
             height: 6px;
             border-radius: 999px;
-            background: #e5e7eb;
+            background: var(--line);
             overflow: hidden;
+            position: relative;
         }
-
-        .progress > span {
+        .progress>span {
             display: block;
             height: 100%;
             width: 0;
             border-radius: inherit;
-            background: var(--primary);
+            transition: width 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+            position: relative;
         }
-
+        .progress>span.downloading {
+            background: linear-gradient(90deg, var(--primary) 0%, #2dd4bf 40%, var(--primary) 70%, #5eead4 100%);
+            background-size: 200% 100%;
+            animation: shimmer 1.6s ease-in-out infinite;
+        }
+        @keyframes shimmer {
+            0% {
+                background-position: 200% 0;
+            }
+            100% {
+                background-position: -200% 0;
+            }
+        }
         .task-sum {
-            font-size: 13px;
+            font-size: 12px;
             color: var(--muted);
+            font-family: var(--font-mono);
+            font-variant-numeric: tabular-nums;
         }
-
         .task-btns {
             display: flex;
-            flex-direction: column;
-            gap: 8px;
-            margin-top: 14px;
+            flex-wrap: wrap;
+            gap: 7px;
+            margin-top: 12px;
+        }
+        .task-btns .btn {
+            font-size: 13px;
+            min-height: 36px;
+            padding: 0 14px;
+            border-radius: var(--radius-xs);
         }
 
-        .task-btns .btn { width: 100%; font-size: 15px; }
+        /* ── 按钮系统 ── */
+        .btn {
+            min-height: var(--tap);
+            border: none;
+            border-radius: var(--radius-xs);
+            padding: 0 16px;
+            font-size: 15px;
+            font-weight: 600;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            -webkit-tap-highlight-color: transparent;
+            transition: all var(--transition-fast);
+            letter-spacing: 0.01em;
+            white-space: nowrap;
+        }
+        .btn:active {
+            transform: scale(0.96);
+            filter: brightness(0.94);
+        }
+        .btn:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+            transform: none;
+            filter: none;
+        }
+        .btn-primary {
+            background: var(--primary);
+            color: #fff;
+            box-shadow: 0 2px 8px var(--primary-glow);
+            font-weight: 700;
+        }
+        .btn-primary:hover {
+            box-shadow: 0 4px 18px var(--primary-glow);
+            filter: brightness(1.06);
+        }
+        .btn-soft {
+            background: var(--primary-weak);
+            color: var(--primary);
+            font-weight: 650;
+        }
+        .btn-soft:hover {
+            background: rgba(13, 148, 136, 0.18);
+        }
+        body.dark .btn-soft:hover {
+            background: rgba(45, 212, 191, 0.18);
+        }
+        .btn-warn {
+            background: var(--warn-weak);
+            color: var(--warn);
+            font-weight: 650;
+        }
+        .btn-warn:hover {
+            background: rgba(217, 119, 6, 0.18);
+        }
+        .btn-danger {
+            background: var(--danger-weak);
+            color: var(--danger);
+            font-weight: 650;
+        }
+        .btn-danger:hover {
+            background: rgba(220, 38, 38, 0.16);
+        }
+        .btn-ghost {
+            background: var(--surface-glass);
+            color: var(--ink-secondary);
+            border: 1px solid var(--line);
+            font-weight: 600;
+            backdrop-filter: var(--backdrop);
+            -webkit-backdrop-filter: var(--backdrop);
+        }
+        .btn-ghost:hover {
+            border-color: var(--line-strong);
+            color: var(--ink);
+            box-shadow: var(--shadow-sm);
+        }
 
+        /* ── 空状态 ── */
         .empty {
             text-align: center;
             color: var(--muted);
             font-size: 14px;
-            padding: 28px 12px;
-            border: 1px dashed var(--line);
+            padding: 36px 16px;
+            border: 1.5px dashed var(--line);
             border-radius: var(--radius);
-            background: #fafafa;
+            background: var(--surface-glass);
+            backdrop-filter: var(--backdrop);
+            -webkit-backdrop-filter: var(--backdrop);
         }
-
         .empty-msg {
             margin: 0;
             line-height: 1.5;
         }
 
+        /* ── Toast ── */
         .toast {
             position: fixed;
-            left: max(12px, env(safe-area-inset-left));
-            right: max(12px, env(safe-area-inset-right));
-            bottom: max(14px, env(safe-area-inset-bottom));
-            padding: 12px 14px;
-            border-radius: var(--radius-sm);
-            background: rgba(17, 24, 39, 0.92);
+            left: 50%;
+            bottom: max(90px, calc(env(safe-area-inset-bottom) + 70px));
+            transform: translateX(-50%) translateY(12px);
+            padding: 12px 22px;
+            border-radius: 999px;
+            background: rgba(26, 29, 37, 0.94);
             color: #fff;
-            font-size: 14px;
+            font-size: 13px;
+            font-weight: 600;
+            letter-spacing: 0.02em;
             opacity: 0;
-            transform: translateY(10px);
-            transition: opacity 0.18s ease, transform 0.18s ease;
+            pointer-events: none;
+            transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
             z-index: 120;
+            box-shadow: 0 8px 28px rgba(0, 0, 0, 0.25);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            white-space: nowrap;
         }
-
         .toast.show {
             opacity: 1;
-            transform: translateY(0);
+            transform: translateX(-50%) translateY(0);
+            pointer-events: auto;
+        }
+        .toast.error {
+            background: rgba(185, 28, 28, 0.94);
         }
 
+        /* ── 模态框 ── */
         .modal-root {
             position: fixed;
             inset: 0;
@@ -470,36 +644,34 @@
             align-items: flex-end;
             justify-content: center;
             padding: 0;
-            background: rgba(17, 24, 39, 0.45);
+            background: rgba(0, 0, 0, 0.5);
             opacity: 0;
             visibility: hidden;
-            transition: opacity 0.2s ease, visibility 0.2s;
+            transition: opacity 0.25s ease, visibility 0.25s;
+            backdrop-filter: blur(2px);
+            -webkit-backdrop-filter: blur(2px);
         }
-
         .modal-root.is-open {
             opacity: 1;
             visibility: visible;
         }
-
         .modal-dialog {
             width: 100%;
-            max-width: 520px;
+            max-width: 500px;
             max-height: min(88vh, 100% - env(safe-area-inset-top) - env(safe-area-inset-bottom));
-            background: var(--surface);
+            background: var(--surface-elevated);
             border: 1px solid var(--line);
             border-radius: var(--radius) var(--radius) 0 0;
-            padding: 14px 14px max(14px, env(safe-area-inset-bottom));
-            box-shadow: 0 -8px 32px rgba(0, 0, 0, 0.12);
+            padding: 16px 16px max(16px, env(safe-area-inset-bottom));
+            box-shadow: var(--shadow-lg);
             transform: translateY(100%);
-            transition: transform 0.22s ease;
+            transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
             overflow-y: auto;
             -webkit-overflow-scrolling: touch;
         }
-
         .modal-root.is-open .modal-dialog {
             transform: translateY(0);
         }
-
         .modal-head {
             display: flex;
             align-items: center;
@@ -507,36 +679,82 @@
             gap: 12px;
             margin-bottom: 14px;
         }
-
         .modal-head h2 {
             margin: 0;
             font-size: 17px;
             font-weight: 700;
+            letter-spacing: -0.015em;
         }
-
         .modal-close {
-            min-width: var(--tap);
-            min-height: var(--tap);
-            margin: -6px -8px -6px 0;
+            min-width: 40px;
+            min-height: 40px;
+            margin: -4px -6px -4px 0;
             border: none;
-            border-radius: var(--radius-sm);
+            border-radius: 50%;
             background: transparent;
             color: var(--muted);
-            font-size: 22px;
+            font-size: 24px;
             line-height: 1;
             cursor: pointer;
             display: inline-flex;
             align-items: center;
             justify-content: center;
+            transition: all var(--transition-fast);
         }
-
-        .modal-close:active { background: #f3f4f6; }
-
+        .modal-close:hover {
+            background: var(--line);
+            color: var(--ink);
+        }
         body.modal-open {
             overflow: hidden;
         }
 
-        /* 底部悬浮：主色胶囊（与早期版本一致，略加大触控） */
+        label {
+            display: block;
+            font-size: 12px;
+            color: var(--muted);
+            margin-bottom: 5px;
+            font-weight: 600;
+            letter-spacing: 0.03em;
+            text-transform: uppercase;
+        }
+        input,
+        select {
+            width: 100%;
+            min-height: var(--tap);
+            border: 1px solid var(--line);
+            border-radius: var(--radius-xs);
+            padding: 10px 12px;
+            font-size: 15px;
+            background: var(--surface);
+            color: var(--ink);
+            transition: all var(--transition-fast);
+            font-family: inherit;
+        }
+        input:focus,
+        select:focus {
+            outline: none;
+            border-color: var(--primary);
+            box-shadow: 0 0 0 3px var(--primary-weak);
+            background: var(--surface-elevated);
+        }
+        .field {
+            margin-bottom: 12px;
+        }
+        .field:last-of-type {
+            margin-bottom: 0;
+        }
+        .row-actions {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 8px;
+            margin-top: 14px;
+        }
+        .row-actions.modal-actions {
+            grid-template-columns: 1fr 1fr;
+        }
+
+        /* ── 底部悬浮按钮 ── */
         .fab-create {
             position: fixed;
             z-index: 60;
@@ -545,56 +763,69 @@
             bottom: 0;
             display: flex;
             justify-content: center;
-            padding: 8px max(14px, env(safe-area-inset-left)) max(10px, env(safe-area-inset-bottom)) max(14px, env(safe-area-inset-right));
+            padding: 8px max(14px, env(safe-area-inset-left)) max(12px, env(safe-area-inset-bottom)) max(14px, env(safe-area-inset-right));
             pointer-events: none;
-            transition: opacity 0.2s ease, transform 0.22s ease;
+            transition: opacity 0.25s ease, transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
         }
-
         .fab-create-btn {
             pointer-events: auto;
             display: inline-flex;
             align-items: center;
             justify-content: center;
             gap: 8px;
-            min-height: 52px;
-            padding: 0 26px;
+            min-height: 54px;
+            padding: 0 28px;
             max-width: min(400px, 100%);
             width: auto;
             border: none;
             border-radius: 999px;
-            background: var(--primary);
+            background: linear-gradient(135deg, var(--primary), #6366f1);
             color: #fff;
             font-size: 15px;
             font-weight: 700;
             cursor: pointer;
-            box-shadow:
-                0 4px 16px rgba(13, 148, 136, 0.38),
-                0 1px 3px rgba(0, 0, 0, 0.08);
+            box-shadow: 0 6px 24px rgba(13, 148, 136, 0.4), 0 2px 6px rgba(0, 0, 0, 0.12);
             -webkit-tap-highlight-color: transparent;
-            transition: transform 0.15s ease, box-shadow 0.15s ease, filter 0.15s ease;
+            transition: all var(--transition-fast);
+            letter-spacing: 0.02em;
+            position: relative;
         }
-
+        .fab-create-btn::after {
+            content: '';
+            position: absolute;
+            inset: -4px;
+            border-radius: 999px;
+            background: inherit;
+            filter: blur(16px);
+            opacity: 0.35;
+            z-index: -1;
+            transition: opacity var(--transition-fast);
+        }
+        .fab-create-btn:hover::after {
+            opacity: 0.55;
+        }
         .fab-create-btn:active {
-            transform: scale(0.98);
-            filter: brightness(0.96);
-            box-shadow: 0 2px 10px rgba(13, 148, 136, 0.3);
+            transform: scale(0.96);
+            filter: brightness(0.94);
+            box-shadow: 0 3px 12px rgba(13, 148, 136, 0.3);
         }
-
+        body.dark .fab-create-btn {
+            background: linear-gradient(135deg, #2dd4bf, #818cf8);
+            box-shadow: 0 6px 28px rgba(45, 212, 191, 0.4), 0 2px 6px rgba(0, 0, 0, 0.2);
+        }
         .fab-create-icon {
-            font-size: 22px;
-            font-weight: 400;
+            font-size: 24px;
+            font-weight: 300;
             line-height: 1;
             margin-top: -1px;
-            opacity: 0.95;
         }
-
         body.modal-open .fab-create {
             opacity: 0;
-            transform: translateY(110%);
+            transform: translateY(120%);
             pointer-events: none;
         }
 
-        /* 自定义确认框（替代 alert/confirm），高于 toast 与新建弹窗 */
+        /* ── 确认框 ── */
         .confirm-root {
             position: fixed;
             inset: 0;
@@ -603,173 +834,176 @@
             align-items: flex-end;
             justify-content: center;
             padding: 0;
-            background: rgba(17, 24, 39, 0.5);
+            background: rgba(0, 0, 0, 0.55);
             opacity: 0;
             visibility: hidden;
-            transition: opacity 0.2s ease, visibility 0.2s;
+            transition: opacity 0.25s ease, visibility 0.25s;
+            backdrop-filter: blur(3px);
+            -webkit-backdrop-filter: blur(3px);
         }
-
         .confirm-root.is-open {
             opacity: 1;
             visibility: visible;
         }
-
         .confirm-dialog {
             width: 100%;
-            max-width: 400px;
-            background: var(--surface);
+            max-width: 380px;
+            background: var(--surface-elevated);
             border: 1px solid var(--line);
             border-radius: var(--radius) var(--radius) 0 0;
-            padding: 18px 18px max(16px, env(safe-area-inset-bottom));
-            box-shadow: 0 -12px 40px rgba(0, 0, 0, 0.14);
+            padding: 20px 20px max(18px, env(safe-area-inset-bottom));
+            box-shadow: var(--shadow-lg);
             transform: translateY(100%);
-            transition: transform 0.22s ease;
+            transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            text-align: center;
         }
-
         .confirm-root.is-open .confirm-dialog {
             transform: translateY(0);
         }
-
         .confirm-icon-wrap {
-            width: 44px;
-            height: 44px;
-            margin: 0 auto 12px;
-            border-radius: 12px;
+            width: 48px;
+            height: 48px;
+            margin: 0 auto 10px;
+            border-radius: 14px;
             background: var(--primary-weak);
             color: var(--primary);
             display: flex;
             align-items: center;
             justify-content: center;
-            font-size: 22px;
+            font-size: 24px;
             line-height: 1;
+            font-weight: 700;
+            transition: all var(--transition-fast);
         }
-
         .confirm-root.confirm-danger .confirm-icon-wrap {
-            background: rgba(220, 38, 38, 0.1);
+            background: var(--danger-weak);
             color: var(--danger);
         }
-
         .confirm-title {
-            margin: 0 0 8px;
-            font-size: 18px;
+            margin: 0 0 6px;
+            font-size: 17px;
             font-weight: 700;
-            text-align: center;
             color: var(--ink);
-            letter-spacing: -0.02em;
+            letter-spacing: -0.015em;
         }
-
         .confirm-message {
-            margin: 0 0 20px;
-            font-size: 15px;
+            margin: 0 0 18px;
+            font-size: 14px;
             line-height: 1.55;
-            color: var(--muted);
-            text-align: center;
+            color: var(--ink-secondary);
         }
-
         .confirm-actions {
             display: grid;
             grid-template-columns: 1fr 1fr;
             gap: 10px;
         }
-
         .confirm-actions .btn {
             min-height: var(--tap);
             width: 100%;
+            font-size: 14px;
         }
 
-        @media (min-width: 560px) {
-            .shell {
-                max-width: 720px;
-                margin: 0 auto;
-                padding-bottom: calc(80px + env(safe-area-inset-bottom, 0px));
-            }
-
-            .metrics-rail {
-                padding: 7px 10px 8px;
-            }
-
+        /* ── 响应式 ── */
+        @media (min-width: 520px) {
             .metrics-rail-items {
                 display: grid;
                 grid-template-columns: repeat(5, minmax(0, 1fr));
-                column-gap: clamp(8px, 2vw, 18px);
-                row-gap: 4px;
+                column-gap: clamp(8px, 2vw, 16px);
+                row-gap: 2px;
                 align-items: start;
             }
-
             .metric-item {
                 align-items: center;
                 text-align: center;
             }
-
-            .metric-item .metric-k {
+            .metric-k {
                 white-space: normal;
                 text-align: center;
                 max-width: 100%;
             }
-
-            .metric-item .metric-v {
+            .metric-v {
                 text-align: center;
             }
-
             .list-head {
                 flex-direction: row;
                 align-items: center;
                 justify-content: space-between;
             }
-
             select.filter {
                 width: auto;
-                min-width: 200px;
-                max-width: 280px;
+                min-width: 180px;
+                max-width: 260px;
                 margin-left: auto;
             }
-
             .task-btns {
                 flex-direction: row;
                 flex-wrap: wrap;
             }
-            .task-btns .btn { width: auto; flex: 1 1 calc(50% - 4px); min-width: 120px; }
-
+            .task-btns .btn {
+                flex: 1 1 auto;
+                min-width: 80px;
+            }
+            .task-play-zone {
+                width: 68px;
+                padding: 10px 8px;
+            }
+            .task-play-hit {
+                width: 50px;
+                height: 50px;
+            }
+            .task-play-svg {
+                width: 24px;
+                height: 24px;
+                margin-left: 3px;
+            }
             .modal-root {
                 align-items: center;
-                padding: max(16px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(16px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+                padding: max(20px, env(safe-area-inset-top)) max(20px, env(safe-area-inset-right)) max(20px, env(safe-area-inset-bottom)) max(20px, env(safe-area-inset-left));
             }
-
             .modal-dialog {
                 border-radius: var(--radius);
-                padding: 18px;
-                max-height: min(86vh, 640px);
-                transform: translateY(12px) scale(0.98);
+                padding: 20px;
+                max-height: min(84vh, 600px);
+                transform: translateY(16px) scale(0.96);
                 opacity: 0;
-                transition: transform 0.2s ease, opacity 0.2s ease;
+                transition: transform 0.28s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.25s ease;
             }
-
             .modal-root.is-open .modal-dialog {
                 transform: translateY(0) scale(1);
                 opacity: 1;
             }
-
             .confirm-root {
                 align-items: center;
-                padding: max(16px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(16px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+                padding: max(20px, env(safe-area-inset-top)) max(20px, env(safe-area-inset-right)) max(20px, env(safe-area-inset-bottom)) max(20px, env(safe-area-inset-left));
             }
-
             .confirm-dialog {
                 border-radius: var(--radius);
-                padding: 22px 22px 20px;
-                max-width: min(400px, 100%);
-                transform: translateY(10px) scale(0.97);
+                padding: 24px 24px 22px;
+                max-width: min(380px, 100%);
+                transform: translateY(14px) scale(0.95);
                 opacity: 0;
-                transition: transform 0.2s ease, opacity 0.2s ease;
+                transition: transform 0.28s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.25s ease;
             }
-
             .confirm-root.is-open .confirm-dialog {
                 transform: translateY(0) scale(1);
                 opacity: 1;
             }
-
             .confirm-actions {
                 gap: 12px;
+            }
+        }
+
+        @media (min-width: 720px) {
+            .shell {
+                padding-bottom: calc(88px + env(safe-area-inset-bottom, 0px));
+            }
+            .task-name {
+                font-size: 17px;
+            }
+            .fab-create-btn {
+                min-height: 56px;
+                padding: 0 32px;
+                font-size: 16px;
             }
         }
     </style>
@@ -779,33 +1013,19 @@
         <header class="top">
             <h1>HLS 下载</h1>
             <div class="top-actions">
+                <button type="button" class="icon-btn theme-toggle" id="theme-toggle" title="切换主题" aria-label="切换深色/浅色模式">🌓</button>
                 <button type="button" class="icon-btn" id="sync-all" title="对账">对账</button>
                 <button type="button" class="icon-btn" id="refresh-all" title="刷新">刷新</button>
             </div>
         </header>
 
-        <section class="metrics-rail" id="metrics-rail" aria-label="运行态与刷盘指标">
+        <section class="metrics-rail" id="metrics-rail" aria-label="运行指标">
             <div class="metrics-rail-items">
-                <div class="metric-item">
-                    <span class="metric-k">runtime 数</span>
-                    <span class="metric-v" id="metric-runtime-count">—</span>
-                </div>
-                <div class="metric-item">
-                    <span class="metric-k">脏 runtime</span>
-                    <span class="metric-v" id="metric-dirty-count">—</span>
-                </div>
-                <div class="metric-item">
-                    <span class="metric-k">活跃调度</span>
-                    <span class="metric-v" id="metric-active-dispatches">—</span>
-                </div>
-                <div class="metric-item">
-                    <span class="metric-k">上次刷盘</span>
-                    <span class="metric-v" id="metric-last-flush-ms">—</span>
-                </div>
-                <div class="metric-item">
-                    <span class="metric-k">平均刷盘</span>
-                    <span class="metric-v" id="metric-avg-flush-ms">—</span>
-                </div>
+                <div class="metric-item"><span class="metric-k">Runtime 数</span><span class="metric-v" id="metric-runtime-count">—</span></div>
+                <div class="metric-item"><span class="metric-k">脏 Runtime</span><span class="metric-v" id="metric-dirty-count">—</span></div>
+                <div class="metric-item"><span class="metric-k">活跃调度</span><span class="metric-v" id="metric-active-dispatches">—</span></div>
+                <div class="metric-item"><span class="metric-k">上次刷盘</span><span class="metric-v" id="metric-last-flush-ms">—</span></div>
+                <div class="metric-item"><span class="metric-k">平均刷盘</span><span class="metric-v" id="metric-avg-flush-ms">—</span></div>
             </div>
         </section>
 
@@ -841,14 +1061,7 @@
 
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
-    <div
-        class="modal-root"
-        id="create-modal"
-        role="dialog"
-        aria-modal="true"
-        aria-hidden="true"
-        aria-labelledby="create-modal-title"
-    >
+    <div class="modal-root" id="create-modal" role="dialog" aria-modal="true" aria-hidden="true" aria-labelledby="create-modal-title">
         <div class="modal-dialog" id="create-modal-dialog">
             <div class="modal-head">
                 <h2 id="create-modal-title">新建任务</h2>
@@ -869,15 +1082,7 @@
         </div>
     </div>
 
-    <div
-        class="confirm-root"
-        id="confirm-modal"
-        role="alertdialog"
-        aria-modal="true"
-        aria-hidden="true"
-        aria-labelledby="confirm-title"
-        aria-describedby="confirm-message"
-    >
+    <div class="confirm-root" id="confirm-modal" role="alertdialog" aria-modal="true" aria-hidden="true" aria-labelledby="confirm-title" aria-describedby="confirm-message">
         <div class="confirm-dialog" id="confirm-dialog">
             <div class="confirm-icon-wrap" aria-hidden="true">?</div>
             <h2 class="confirm-title" id="confirm-title">请确认</h2>
@@ -890,266 +1095,245 @@
     </div>
 
     <script>
-        const API = '/api/v1';
-        const state = {
-            tasks: [],
-            metrics: {},
-            taskFilter: '',
-            pollTimer: null,
-            actionLocks: new Set()
-        };
+        (() => {
+            const API = '/api/v1';
 
-        const el = {
-            taskList: document.getElementById('task-list'),
-            taskName: document.getElementById('task-name'),
-            taskURL: document.getElementById('task-url'),
-            statusFilter: document.getElementById('status-filter'),
-            toast: document.getElementById('toast'),
-            createModal: document.getElementById('create-modal'),
-            createModalDialog: document.getElementById('create-modal-dialog'),
-            fabCreate: document.getElementById('fab-create'),
-            confirmModal: document.getElementById('confirm-modal'),
-            confirmMessage: document.getElementById('confirm-message'),
-            confirmTitle: document.getElementById('confirm-title'),
-            confirmOk: document.getElementById('confirm-ok'),
-            confirmCancel: document.getElementById('confirm-cancel')
-        };
+            // ── DOM 缓存 ──
+            const $ = (sel, ctx = document) => ctx.querySelector(sel);
+            const $$ = (sel, ctx = document) => [...ctx.querySelectorAll(sel)];
 
-        let createModalPreviouslyFocused = null;
-        let confirmResolve = null;
-        let confirmPreviousFocus = null;
-
-        document.getElementById('fab-create-open').addEventListener('click', openCreateModal);
-        document.getElementById('close-create-modal').addEventListener('click', closeCreateModal);
-        document.getElementById('cancel-create-modal').addEventListener('click', closeCreateModal);
-        document.getElementById('submit-task').addEventListener('click', createTask);
-        document.getElementById('sync-all').addEventListener('click', syncAll);
-        document.getElementById('refresh-all').addEventListener('click', fetchTasks);
-
-        el.createModal.addEventListener('click', event => {
-            if (event.target === el.createModal) closeCreateModal();
-        });
-
-        el.confirmModal.addEventListener('click', event => {
-            if (event.target === el.confirmModal) finishConfirm(false);
-        });
-        el.confirmCancel.addEventListener('click', () => finishConfirm(false));
-        el.confirmOk.addEventListener('click', () => finishConfirm(true));
-
-        document.addEventListener('keydown', event => {
-            if (event.key !== 'Escape') return;
-            if (el.confirmModal.classList.contains('is-open')) {
-                event.preventDefault();
-                finishConfirm(false);
-                return;
-            }
-            if (el.createModal.classList.contains('is-open')) {
-                event.preventDefault();
-                closeCreateModal();
-            }
-        });
-
-        el.statusFilter.addEventListener('change', () => {
-            state.taskFilter = el.statusFilter.value;
-            updateStats();
-            renderTasks();
-        });
-
-        fetchTasks();
-
-        function updateOverlays() {
-            const locked = el.createModal.classList.contains('is-open') ||
-                el.confirmModal.classList.contains('is-open');
-            document.body.classList.toggle('modal-open', locked);
-            if (el.fabCreate) el.fabCreate.setAttribute('aria-hidden', locked ? 'true' : 'false');
-        }
-
-        function openCreateModal() {
-            createModalPreviouslyFocused = document.activeElement;
-            el.createModal.classList.add('is-open');
-            el.createModal.setAttribute('aria-hidden', 'false');
-            updateOverlays();
-            requestAnimationFrame(() => el.taskURL.focus());
-        }
-
-        function closeCreateModal() {
-            if (!el.createModal.classList.contains('is-open')) return;
-            el.createModal.classList.remove('is-open');
-            el.createModal.setAttribute('aria-hidden', 'true');
-            updateOverlays();
-            if (createModalPreviouslyFocused && typeof createModalPreviouslyFocused.focus === 'function') {
-                createModalPreviouslyFocused.focus();
-            }
-        }
-
-        function confirmConfigForAction(action) {
-            const verb = action || 'delete';
-            if (verb === 'delete') {
-                return {
-                    title: '删除任务',
-                    message: '删除后将移除记录与已下载文件，且不可恢复。确定删除该任务吗？',
-                    okText: '删除',
-                    danger: true,
-                    icon: '!'
-                };
-            }
-            if (verb === 'pause') {
-                return {
-                    title: '暂停下载',
-                    message: '暂停后可在列表中随时继续。确定暂停该任务吗？',
-                    okText: '暂停',
-                    danger: false,
-                    icon: '\u23F8'
-                };
-            }
-            if (verb === 'resume') {
-                return {
-                    title: '继续下载',
-                    message: '将从当前进度继续拉取分片。确定继续吗？',
-                    okText: '继续',
-                    danger: false,
-                    icon: '▶'
-                };
-            }
-            if (verb === 'retry') {
-                return {
-                    title: '重试失败项',
-                    message: '将清空失败标记并重新排队失败的分片。确定重试吗？',
-                    okText: '重试',
-                    danger: false,
-                    icon: '↻'
-                };
-            }
-            return {
-                title: '请确认',
-                message: `确定要执行「${verb}」吗？`,
-                okText: '确定',
-                danger: false,
-                icon: '?'
+            const dom = {
+                taskList: $('#task-list'),
+                taskName: $('#task-name'),
+                taskURL: $('#task-url'),
+                statusFilter: $('#status-filter'),
+                toast: $('#toast'),
+                createModal: $('#create-modal'),
+                fabCreate: $('#fab-create'),
+                confirmModal: $('#confirm-modal'),
+                confirmMessage: $('#confirm-message'),
+                confirmTitle: $('#confirm-title'),
+                confirmOk: $('#confirm-ok'),
+                confirmCancel: $('#confirm-cancel'),
+                confirmIconWrap: $('.confirm-icon-wrap', document),
+                syncBtn: $('#sync-all'),
+                refreshBtn: $('#refresh-all'),
+                themeToggle: $('#theme-toggle'),
+                statTotal: $('#stat-total'),
+                statActive: $('#stat-active'),
+                statFailed: $('#stat-failed'),
             };
-        }
 
-        function showConfirm(action) {
-            if (confirmResolve) finishConfirm(false);
-            const cfg = confirmConfigForAction(action);
-            return new Promise(resolve => {
-                confirmResolve = resolve;
-                confirmPreviousFocus = document.activeElement;
-                el.confirmTitle.textContent = cfg.title;
-                el.confirmMessage.textContent = cfg.message;
-                el.confirmCancel.textContent = '取消';
-                el.confirmOk.textContent = cfg.okText;
-                el.confirmOk.className = 'btn ' + (cfg.danger ? 'btn-danger' : 'btn-primary');
-                el.confirmModal.classList.toggle('confirm-danger', !!cfg.danger);
-                const iconWrap = el.confirmModal.querySelector('.confirm-icon-wrap');
-                if (iconWrap) iconWrap.textContent = cfg.icon || '?';
-                el.confirmModal.classList.add('is-open');
-                el.confirmModal.setAttribute('aria-hidden', 'false');
-                updateOverlays();
-                requestAnimationFrame(() => el.confirmOk.focus());
+            // ── 状态 ──
+            const state = {
+                tasks: [],
+                metrics: {},
+                taskFilter: '',
+                pollTimer: null,
+                actionLocks: new Set(),
+                confirmResolve: null,
+                confirmPrevFocus: null,
+                createPrevFocus: null,
+            };
+
+            // ── 主题 ──
+            const themeKey = 'hls-dl-theme';
+            const getSystemTheme = () => window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+            const applyTheme = (t) => {
+                document.body.classList.toggle('dark', t === 'dark');
+                dom.themeToggle.textContent = t === 'dark' ? '☀️' : '🌙';
+            };
+            const toggleTheme = () => {
+                const next = document.body.classList.contains('dark') ? 'light' : 'dark';
+                localStorage.setItem(themeKey, next);
+                applyTheme(next);
+            };
+            const saved = localStorage.getItem(themeKey);
+            applyTheme(saved || getSystemTheme());
+            dom.themeToggle.addEventListener('click', toggleTheme);
+            window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
+                if (!localStorage.getItem(themeKey)) applyTheme(getSystemTheme());
             });
-        }
 
-        function finishConfirm(value) {
-            if (!confirmResolve) return;
-            const cb = confirmResolve;
-            confirmResolve = null;
-            el.confirmModal.classList.remove('is-open');
-            el.confirmModal.classList.remove('confirm-danger');
-            el.confirmModal.setAttribute('aria-hidden', 'true');
-            updateOverlays();
-            const prev = confirmPreviousFocus;
-            confirmPreviousFocus = null;
-            if (prev && typeof prev.focus === 'function') prev.focus();
-            cb(!!value);
-        }
-
-        async function fetchTasks() {
-            const res = await fetch(`${API}/tasks`);
-            const data = await res.json();
-            state.tasks = data.items || [];
-            state.metrics = data.metrics || {};
-            updateStats();
-            renderTasks();
-            schedulePoll();
-        }
-
-        function schedulePoll() {
-            clearTimeout(state.pollTimer);
-            const busy = state.tasks.some(task => ['downloading', 'parsing'].includes(task.status));
-            state.pollTimer = setTimeout(fetchTasks, busy ? 3000 : 8000);
-        }
-
-        function updateStats() {
-            const all = state.tasks;
-            const filtered = state.taskFilter
-                ? all.filter(task => task.status === state.taskFilter)
-                : all;
-            document.getElementById('stat-total').textContent = state.taskFilter ? filtered.length : all.length;
-            document.getElementById('stat-active').textContent = all.filter(t =>
-                ['downloading', 'parsing'].includes(t.status)).length;
-            document.getElementById('stat-failed').textContent = all.filter(t => t.status === 'failed').length;
-
-            const totalLabel = document.querySelector('#stat-total + span');
-            const activeLabel = document.querySelector('#stat-active + span');
-            if (totalLabel) totalLabel.textContent = state.taskFilter ? '本筛选' : '全部';
-            if (activeLabel) activeLabel.textContent = '进行中';
-            updateMetricsRail();
-            if (el.statusFilter && el.statusFilter.value !== state.taskFilter) {
-                el.statusFilter.value = state.taskFilter;
-            }
-        }
-
-        function updateMetricsRail() {
-            const m = state.metrics || {};
-            const fmt = (v, suffix = '') => {
-                if (v === undefined || v === null || Number.isNaN(Number(v))) return '—';
-                return String(v) + suffix;
+            // ── 遮罩层互斥 ──
+            const updateOverlays = () => {
+                const locked = dom.createModal.classList.contains('is-open') ||
+                    dom.confirmModal.classList.contains('is-open');
+                document.body.classList.toggle('modal-open', locked);
+                if (dom.fabCreate) dom.fabCreate.setAttribute('aria-hidden', locked ? 'true' : 'false');
             };
-            const set = (id, text) => {
-                const node = document.getElementById(id);
-                if (node) node.textContent = text;
+
+            // ── 创建弹窗 ──
+            const openCreateModal = () => {
+                state.createPrevFocus = document.activeElement;
+                dom.createModal.classList.add('is-open');
+                dom.createModal.setAttribute('aria-hidden', 'false');
+                updateOverlays();
+                requestAnimationFrame(() => dom.taskURL.focus());
             };
-            set('metric-runtime-count', fmt(m.runtime_count));
-            set('metric-dirty-count', fmt(m.dirty_runtime_count));
-            set('metric-active-dispatches', fmt(m.active_dispatches));
-            set('metric-last-flush-ms', fmt(m.last_flush_cost_ms, ' ms'));
-            set('metric-avg-flush-ms', fmt(m.average_flush_cost_ms, ' ms'));
-        }
+            const closeCreateModal = () => {
+                if (!dom.createModal.classList.contains('is-open')) return;
+                dom.createModal.classList.remove('is-open');
+                dom.createModal.setAttribute('aria-hidden', 'true');
+                updateOverlays();
+                if (state.createPrevFocus && typeof state.createPrevFocus.focus === 'function') {
+                    state.createPrevFocus.focus();
+                }
+            };
 
-        function renderTasks() {
-            const tasks = state.taskFilter
-                ? state.tasks.filter(task => task.status === state.taskFilter)
-                : state.tasks;
-            if (!tasks.length) {
-                const msg = state.taskFilter ? '当前筛选下暂无任务' : '暂无任务';
-                el.taskList.innerHTML = `<div class="empty"><p class="empty-msg">${escapeHTML(msg)}</p></div>`;
-                return;
-            }
+            // ── 确认弹窗 ──
+            const confirmConfigs = {
+                delete: { title: '删除任务', message: '删除后将移除记录与已下载文件，且不可恢复。确定删除该任务吗？', okText: '删除',
+                    danger: true, icon: '⚠' },
+                pause: { title: '暂停下载', message: '暂停后可在列表中随时继续。确定暂停该任务吗？', okText: '暂停',
+                danger: false, icon: '⏸' },
+                resume: { title: '继续下载', message: '将从当前进度继续拉取分片。确定继续吗？', okText: '继续', danger: false,
+                    icon: '▶' },
+                retry: { title: '重试失败项', message: '将清空失败标记并重新排队失败的分片。确定重试吗？', okText: '重试', danger: false,
+                    icon: '↻' },
+                '': { title: '请确认', message: '确定要执行该操作吗？', okText: '确定', danger: false, icon: '?' },
+            };
 
-            el.taskList.innerHTML = tasks.map(task => {
-                const progress = Math.round((Number(task.progress || 0)) * 100);
-                const color = statusColor(task.status);
-                const total = task.total_segments || task.total_items || 0;
-                const done = task.downloaded_segments ?? task.done_items ?? 0;
-                const url = escapeHTML(task.original_url);
-                const lock = state.actionLocks.has(task.id);
-                return `
+            const showConfirm = (action) => {
+                if (state.confirmResolve) finishConfirm(false);
+                const cfg = confirmConfigs[action] || confirmConfigs[''];
+                return new Promise(resolve => {
+                    state.confirmResolve = resolve;
+                    state.confirmPrevFocus = document.activeElement;
+                    dom.confirmTitle.textContent = cfg.title;
+                    dom.confirmMessage.textContent = cfg.message;
+                    dom.confirmCancel.textContent = '取消';
+                    dom.confirmOk.textContent = cfg.okText;
+                    dom.confirmOk.className = 'btn ' + (cfg.danger ? 'btn-danger' : 'btn-primary');
+                    dom.confirmModal.classList.toggle('confirm-danger', !!cfg.danger);
+                    if (dom.confirmIconWrap) dom.confirmIconWrap.textContent = cfg.icon || '?';
+                    dom.confirmModal.classList.add('is-open');
+                    dom.confirmModal.setAttribute('aria-hidden', 'false');
+                    updateOverlays();
+                    requestAnimationFrame(() => dom.confirmOk.focus());
+                });
+            };
+            const finishConfirm = (value) => {
+                if (!state.confirmResolve) return;
+                const cb = state.confirmResolve;
+                state.confirmResolve = null;
+                dom.confirmModal.classList.remove('is-open', 'confirm-danger');
+                dom.confirmModal.setAttribute('aria-hidden', 'true');
+                updateOverlays();
+                const prev = state.confirmPrevFocus;
+                state.confirmPrevFocus = null;
+                if (prev && typeof prev.focus === 'function') prev.focus();
+                cb(!!value);
+            };
+
+            // ── Toast ──
+            let toastTimer;
+            const toast = (message, isError = false) => {
+                dom.toast.textContent = message || (isError ? '失败' : '成功');
+                dom.toast.classList.toggle('error', isError);
+                dom.toast.classList.add('show');
+                clearTimeout(toastTimer);
+                toastTimer = setTimeout(() => dom.toast.classList.remove('show'), 2200);
+            };
+
+            // ── 数据获取 ──
+            const fetchTasks = async () => {
+                try {
+                    const res = await fetch(`${API}/tasks`);
+                    const data = await res.json();
+                    state.tasks = data.items || [];
+                    state.metrics = data.metrics || {};
+                } catch {
+                    // 静默处理网络错误
+                }
+                updateStats();
+                renderTasks();
+                schedulePoll();
+            };
+
+            const schedulePoll = () => {
+                clearTimeout(state.pollTimer);
+                const busy = state.tasks.some(t => ['downloading', 'parsing'].includes(t.status));
+                state.pollTimer = setTimeout(fetchTasks, busy ? 3000 : 8000);
+            };
+
+            // ── 统计与指标 ──
+            const updateStats = () => {
+                const all = state.tasks;
+                const filtered = state.taskFilter ? all.filter(t => t.status === state.taskFilter) : all;
+                dom.statTotal.textContent = state.taskFilter ? filtered.length : all.length;
+                dom.statActive.textContent = all.filter(t => ['downloading', 'parsing'].includes(t.status)).length;
+                dom.statFailed.textContent = all.filter(t => t.status === 'failed').length;
+                const totalLabel = dom.statTotal.nextElementSibling;
+                if (totalLabel) totalLabel.textContent = state.taskFilter ? '本筛选' : '全部';
+                updateMetricsRail();
+                if (dom.statusFilter.value !== state.taskFilter) {
+                    dom.statusFilter.value = state.taskFilter;
+                }
+            };
+
+            const updateMetricsRail = () => {
+                const m = state.metrics || {};
+                const fmt = (v, suffix = '') => (v === undefined || v === null || Number.isNaN(Number(v))) ? '—' : String(
+                    v) + suffix;
+                const set = (id, text) => { const n = document.getElementById(id); if (n) n.textContent = text; };
+                set('metric-runtime-count', fmt(m.runtime_count));
+                set('metric-dirty-count', fmt(m.dirty_runtime_count));
+                set('metric-active-dispatches', fmt(m.active_dispatches));
+                set('metric-last-flush-ms', fmt(m.last_flush_cost_ms, ' ms'));
+                set('metric-avg-flush-ms', fmt(m.average_flush_cost_ms, ' ms'));
+            };
+
+            // ── 渲染任务列表 ──
+            const statusColorMap = {
+                completed: 'var(--ok)',
+                failed: 'var(--danger)',
+                paused: 'var(--warn)',
+                downloading: 'var(--primary)',
+            };
+            const progressBarColorMap = { ...statusColorMap };
+            const statusColor = (s) => statusColorMap[s] || 'var(--muted)';
+            const progressBarColor = (s) => progressBarColorMap[s] || 'var(--primary)';
+            const escapeHTML = (v) => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;',
+                '"': '&quot;', "'": '&#39;' } [c]));
+
+            const renderTasks = () => {
+                const tasks = state.taskFilter ? state.tasks.filter(t => t.status === state.taskFilter) : state.tasks;
+                if (!tasks.length) {
+                    const msg = state.taskFilter ? '当前筛选下暂无任务' : '暂无任务';
+                    dom.taskList.innerHTML =
+                        `<div class="empty"><p class="empty-msg">${escapeHTML(msg)}</p></div>`;
+                    return;
+                }
+                dom.taskList.innerHTML = tasks.map(task => {
+                    const progress = Math.round((Number(task.progress || 0)) * 100);
+                    const total = task.total_segments || task.total_items || 0;
+                    const done = task.downloaded_segments ?? task.done_items ?? 0;
+                    const url = escapeHTML(task.original_url);
+                    const lock = state.actionLocks.has(task.id);
+                    const isDownloading = task.status === 'downloading';
+                    const btnDisabled = (t) => lock ? 'disabled' : '';
+                    const btnLabel = (t) => lock ? '…' : t;
+                    const actions = [];
+                    if (task.status === 'downloading') actions.push(
+                        `<button type="button" class="btn btn-warn" data-action="pause" ${btnDisabled('暂停')}>${btnLabel('暂停')}</button>`);
+                    if (['paused', 'failed'].includes(task.status)) actions.push(
+                        `<button type="button" class="btn btn-soft" data-action="resume" ${btnDisabled('继续')}>${btnLabel('继续')}</button>`);
+                    if (task.failed_items > 0) actions.push(
+                        `<button type="button" class="btn btn-soft" data-action="retry" ${btnDisabled('重试')}>${btnLabel('重试')}</button>`);
+                    actions.push(
+                        `<button type="button" class="btn btn-danger" data-action="delete" ${btnDisabled('删除')}>${btnLabel('删除')}</button>`);
+                    return `
                     <article class="task" data-id="${task.id}">
                         <div class="task-main">
                             <div class="task-hd">
                                 <h3 class="task-name">${escapeHTML(task.name || '未命名')}</h3>
-                                <span class="badge" style="color:${color};">${task.status}</span>
+                                <span class="badge" style="color:${statusColor(task.status)};">${task.status}</span>
                             </div>
                             <div class="task-url" title="${url}">${url}</div>
-                            <div class="progress"><span style="width:${progress}%; background:${progressBar(task.status)}"></span></div>
+                            <div class="progress"><span style="width:${progress}%; background:${progressBarColor(task.status)};" class="${isDownloading ? 'downloading' : ''}"></span></div>
                             <div class="task-sum">${done}/${total} · 失败 ${task.failed_items || 0} · ${progress}%</div>
-                            <div class="task-btns">
-                                ${task.status === 'downloading' ? `<button type="button" class="btn btn-warn" data-action="pause" ${lock ? 'disabled' : ''}>${lock ? '…' : '暂停'}</button>` : ''}
-                                ${['paused', 'failed'].includes(task.status) ? `<button type="button" class="btn btn-soft" data-action="resume" ${lock ? 'disabled' : ''}>${lock ? '…' : '继续'}</button>` : ''}
-                                ${task.failed_items > 0 ? `<button type="button" class="btn btn-soft" data-action="retry" ${lock ? 'disabled' : ''}>${lock ? '…' : '重试'}</button>` : ''}
-                                <button type="button" class="btn btn-danger" data-action="delete" ${lock ? 'disabled' : ''}>${lock ? '…' : '删除'}</button>
-                            </div>
+                            <div class="task-btns">${actions.join('')}</div>
                         </div>
                         <button type="button" class="task-play-zone" data-action="play" aria-label="代理播放 M3U8" title="代理播放">
                             <span class="task-play-hit">
@@ -1158,148 +1342,134 @@
                                 </svg>
                             </span>
                         </button>
-                    </article>
-                `;
-            }).join('');
+                    </article>`;
+                }).join('');
 
-            el.taskList.querySelectorAll('.task').forEach(card => {
-                card.addEventListener('click', event => {
-                    const btn = event.target.closest('[data-action]');
-                    if (!btn) return;
-                    event.stopPropagation();
-                    quickAction(card.dataset.id, btn.getAttribute('data-action'));
+                // 事件委托
+                dom.taskList.querySelectorAll('.task').forEach(card => {
+                    card.addEventListener('click', event => {
+                        const btn = event.target.closest('[data-action]');
+                        if (!btn) return;
+                        event.stopPropagation();
+                        quickAction(card.dataset.id, btn.getAttribute('data-action'));
+                    });
                 });
-            });
-        }
+            };
 
-        async function createTask() {
-            const name = el.taskName.value.trim();
-            const url = el.taskURL.value.trim();
-            if (!url) {
-                toast('请填写 M3U8 链接', true);
-                return;
-            }
-            const res = await fetch(`${API}/tasks`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ name, url })
-            });
-            if (!res.ok) {
-                toast(await res.text(), true);
-                return;
-            }
-            el.taskName.value = '';
-            el.taskURL.value = '';
-            closeCreateModal();
-            toast('已创建');
-            fetchTasks();
-        }
-
-        async function quickAction(id, action) {
-            const task = state.tasks.find(item => item.id === id);
-            if (!task) return;
-            if (action === 'play') {
-                window.location.assign(`/proxy/m3u8/${encodeURIComponent(task.original_url)}`);
-                return;
-            }
-            if (action === 'delete') {
-                await taskAction(id, '', { method: 'DELETE' });
-                return;
-            }
-            if (action === 'retry') {
-                await taskAction(id, 'retry', { method: 'POST' });
-                return;
-            }
-            await taskAction(id, action);
-        }
-
-        async function taskAction(taskID, action, override = null) {
-            if (!taskID) return;
-            if (state.actionLocks.has(taskID)) return;
-            let url = `${API}/tasks/${taskID}`;
-            let options = override || { method: 'POST' };
-            if (action) url += `/${action}`;
-            if (!(await showConfirm(action))) return;
-            state.actionLocks.add(taskID);
-            applyOptimisticTaskAction(taskID, action);
-            renderTasks();
-            if (options.body && !options.headers) {
-                options.headers = { 'Content-Type': 'application/json' };
-            }
-            const res = await fetch(url, options);
-            if (!res.ok) {
-                state.actionLocks.delete(taskID);
-                await fetchTasks();
-                toast(await res.text(), true);
-                return;
-            }
-            toast(action ? '已执行' : '已删除');
-            state.actionLocks.delete(taskID);
-            await fetchTasks();
-        }
-
-        function applyOptimisticTaskAction(taskID, action) {
-            state.tasks = state.tasks.map(task => {
-                if (task.id !== taskID) return task;
-                if (action === 'pause') return { ...task, status: 'paused' };
-                if (action === 'resume' || action === 'retry') return { ...task, status: 'downloading' };
-                return task;
-            }).filter(task => !(task.id === taskID && action === ''));
-        }
-
-        async function syncAll() {
-            const btn = document.getElementById('sync-all');
-            btn.disabled = true;
-            try {
-                const res = await fetch(`${API}/tasks/sync`, { method: 'POST' });
-                if (!res.ok) {
-                    toast(await res.text(), true);
+            // ── 任务操作 ──
+            const quickAction = async (id, action) => {
+                const task = state.tasks.find(t => t.id === id);
+                if (!task) return;
+                if (action === 'play') {
+                    window.location.assign(`/proxy/m3u8/${encodeURIComponent(task.original_url)}`);
                     return;
                 }
-                const data = await res.json();
-                toast(`已更新 ${data.updated || 0} 项`);
-                fetchTasks();
-            } finally {
-                btn.disabled = false;
-            }
-        }
+                if (action === 'delete') {
+                    await taskAction(id, '', { method: 'DELETE' });
+                    return;
+                }
+                if (action === 'retry') {
+                    await taskAction(id, 'retry', { method: 'POST' });
+                    return;
+                }
+                await taskAction(id, action);
+            };
 
-        function toast(message, isError = false) {
-            el.toast.textContent = message || (isError ? '失败' : '成功');
-            el.toast.style.background = isError ? 'rgba(185, 28, 28, 0.94)' : 'rgba(17, 24, 39, 0.92)';
-            el.toast.classList.add('show');
-            clearTimeout(window.__toastTimer);
-            window.__toastTimer = setTimeout(() => el.toast.classList.remove('show'), 2200);
-        }
+            const taskAction = async (taskID, action, override = null) => {
+                if (!taskID || state.actionLocks.has(taskID)) return;
+                let url = `${API}/tasks/${taskID}`;
+                let options = override || { method: 'POST' };
+                if (action) url += `/${action}`;
+                if (!(await showConfirm(action))) return;
+                state.actionLocks.add(taskID);
+                applyOptimistic(taskID, action);
+                renderTasks();
+                if (options.body && !options.headers) options.headers = { 'Content-Type': 'application/json' };
+                try {
+                    const res = await fetch(url, options);
+                    if (!res.ok) {
+                        state.actionLocks.delete(taskID);
+                        await fetchTasks();
+                        toast(await res.text(), true);
+                        return;
+                    }
+                    toast(action ? '已执行' : '已删除');
+                } catch {
+                    toast('网络错误', true);
+                }
+                state.actionLocks.delete(taskID);
+                await fetchTasks();
+            };
 
-        function statusColor(status) {
-            switch (status) {
-                case 'completed': return 'var(--ok)';
-                case 'failed': return 'var(--danger)';
-                case 'paused': return 'var(--warn)';
-                case 'downloading': return 'var(--primary)';
-                default: return 'var(--muted)';
-            }
-        }
+            const applyOptimistic = (taskID, action) => {
+                state.tasks = state.tasks.map(t => {
+                    if (t.id !== taskID) return t;
+                    if (action === 'pause') return { ...t, status: 'paused' };
+                    if (action === 'resume' || action === 'retry') return { ...t, status: 'downloading' };
+                    return t;
+                }).filter(t => !(t.id === taskID && action === ''));
+            };
 
-        function progressBar(status) {
-            switch (status) {
-                case 'completed': return 'var(--ok)';
-                case 'failed': return 'var(--danger)';
-                case 'paused': return 'var(--warn)';
-                default: return 'var(--primary)';
-            }
-        }
+            // ── 创建任务 ──
+            const createTask = async () => {
+                const name = dom.taskName.value.trim();
+                const url = dom.taskURL.value.trim();
+                if (!url) { toast('请填写 M3U8 链接', true); return; }
+                try {
+                    const res = await fetch(`${API}/tasks`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ name, url }),
+                    });
+                    if (!res.ok) { toast(await res.text(), true); return; }
+                    dom.taskName.value = '';
+                    dom.taskURL.value = '';
+                    closeCreateModal();
+                    toast('已创建');
+                    fetchTasks();
+                } catch { toast('创建失败', true); }
+            };
 
-        function escapeHTML(value) {
-            return String(value ?? '').replace(/[&<>"']/g, char => ({
-                '&': '&amp;',
-                '<': '&lt;',
-                '>': '&gt;',
-                '"': '&quot;',
-                "'": '&#39;'
-            }[char]));
-        }
+            // ── 对账 ──
+            const syncAll = async () => {
+                dom.syncBtn.disabled = true;
+                try {
+                    const res = await fetch(`${API}/tasks/sync`, { method: 'POST' });
+                    if (!res.ok) { toast(await res.text(), true); return; }
+                    const data = await res.json();
+                    toast(`已更新 ${data.updated || 0} 项`);
+                    fetchTasks();
+                } catch { toast('对账失败', true); } finally { dom.syncBtn.disabled = false; }
+            };
+
+            // ── 事件绑定 ──
+            $('#fab-create-open').addEventListener('click', openCreateModal);
+            $('#close-create-modal').addEventListener('click', closeCreateModal);
+            $('#cancel-create-modal').addEventListener('click', closeCreateModal);
+            $('#submit-task').addEventListener('click', createTask);
+            dom.syncBtn.addEventListener('click', syncAll);
+            dom.refreshBtn.addEventListener('click', fetchTasks);
+            dom.statusFilter.addEventListener('change', () => {
+                state.taskFilter = dom.statusFilter.value;
+                updateStats();
+                renderTasks();
+            });
+            dom.createModal.addEventListener('click', e => { if (e.target === dom.createModal) closeCreateModal(); });
+            dom.confirmModal.addEventListener('click', e => { if (e.target === dom.confirmModal) finishConfirm(
+                false); });
+            dom.confirmCancel.addEventListener('click', () => finishConfirm(false));
+            dom.confirmOk.addEventListener('click', () => finishConfirm(true));
+            document.addEventListener('keydown', e => {
+                if (e.key !== 'Escape') return;
+                if (dom.confirmModal.classList.contains('is-open')) { e.preventDefault();
+                    finishConfirm(false); return; }
+                if (dom.createModal.classList.contains('is-open')) { e.preventDefault();
+                    closeCreateModal(); }
+            });
+
+            // ── 启动 ──
+            fetchTasks();
+        })();
     </script>
 </body>
 </html>
