@@ -152,11 +152,14 @@ mkdir -p "\$current_hls_dir"
 if docker image inspect "\$image_name" >/dev/null 2>&1; then
     build_container="\${container_name}-build"
     docker rm -f "\$build_container" >/dev/null 2>&1 || true
-    docker create --name "\$build_container" "\$image_name" >/dev/null
+    docker create --name "\$build_container" --entrypoint /bin/sh "\$image_name" -c "sleep 600" >/dev/null
     docker cp "\$remote_dir/hls-accel" "\$build_container:/app/hls-accel"
     docker cp "\$remote_dir/docker-entrypoint.sh" "\$build_container:/app/docker-entrypoint.sh"
     docker cp "\$remote_dir/aria2.conf" "\$build_container:/app/aria2.conf"
     docker cp "\$remote_dir/web/." "\$build_container:/app/web/"
+    docker start "\$build_container" >/dev/null
+    docker exec "\$build_container" chmod +x /app/docker-entrypoint.sh /app/hls-accel
+    docker stop "\$build_container" >/dev/null
     docker commit \
         --change 'ENTRYPOINT ["/app/docker-entrypoint.sh"]' \
         --change 'ENV ARIA2_CONF_PATH=/app/aria2.conf' \

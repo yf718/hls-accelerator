@@ -23,6 +23,12 @@ function Require-File([string]$Path) {
     }
 }
 
+function Write-UnixTextFile([string]$Path, [string]$Content) {
+    $normalized = $Content -replace "`r`n", "`n"
+    $enc = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($Path, $normalized, $enc)
+}
+
 Require-File (Join-Path $PackageDir "hls-accel")
 Require-File (Join-Path $PackageDir "web/index.html")
 Require-File (Join-Path $RootDir "aria2.conf")
@@ -35,7 +41,7 @@ try {
     Copy-Item -LiteralPath (Join-Path $PackageDir "web/*") -Destination (Join-Path $StageDir "web") -Recurse
     Copy-Item -LiteralPath (Join-Path $RootDir "aria2.conf") -Destination (Join-Path $StageDir "aria2.conf")
 
-    @'
+    Write-UnixTextFile (Join-Path $StageDir "docker-entrypoint.sh") @'
 #!/bin/sh
 set -e
 ARIA2_CONF_PATH="${ARIA2_CONF_PATH:-/app/aria2.conf}"
@@ -49,9 +55,9 @@ echo "Waiting for Aria2 RPC to be ready..."
 sleep 3
 echo "Starting hls-accel..."
 exec /app/hls-accel
-'@ | Set-Content -Encoding Ascii (Join-Path $StageDir "docker-entrypoint.sh")
+'@
 
-    @'
+    Write-UnixTextFile (Join-Path $StageDir "Dockerfile") @'
 FROM alpine:latest
 RUN apk add --no-cache aria2 ca-certificates && rm -rf /var/cache/apk/*
 WORKDIR /app
@@ -64,14 +70,14 @@ EXPOSE 8084 6800
 ENV CACHE_DIR=/app/cache
 ENV ARIA2_CONF_PATH=/app/aria2.conf
 ENTRYPOINT ["/app/docker-entrypoint.sh"]
-'@ | Set-Content -Encoding Ascii (Join-Path $StageDir "Dockerfile")
+'@
 
     Write-Host "Staging deploy files to ${TargetUser}@${TargetHost}:$RemoteDeployDir"
     & ssh -i $SshKey -p $TargetPort -o BatchMode=yes "$TargetUser@$TargetHost" "rm -rf '$RemoteDeployDir' && mkdir -p '$RemoteDeployDir'"
     & scp -i $SshKey -P $TargetPort -o BatchMode=yes -r "$StageDir/." "$TargetUser@$TargetHost`:$RemoteDeployDir/"
 
     $RemoteScriptPath = Join-Path $StageDir "remote-deploy.sh"
-    @"
+    $RemoteScriptContent = @"
 set -eu
 container_name='$ContainerName'
 image_name='$ImageName'
@@ -97,11 +103,14 @@ mkdir -p "`$current_cache_dir" "`$current_hls_dir"
 if docker image inspect "`$image_name" >/dev/null 2>&1; then
   build_container="`${container_name}-build"
   docker rm -f "`$build_container" >/dev/null 2>&1 || true
-  docker create --name "`$build_container" "`$image_name" >/dev/null
+  docker create --name "`$build_container" --entrypoint /bin/sh "`$image_name" -c "sleep 600" >/dev/null
   docker cp "`$remote_dir/hls-accel" "`$build_container:/app/hls-accel"
   docker cp "`$remote_dir/docker-entrypoint.sh" "`$build_container:/app/docker-entrypoint.sh"
   docker cp "`$remote_dir/aria2.conf" "`$build_container:/app/aria2.conf"
   docker cp "`$remote_dir/web/." "`$build_container:/app/web/"
+  docker start "`$build_container" >/dev/null
+  docker exec "`$build_container" chmod +x /app/docker-entrypoint.sh /app/hls-accel
+  docker stop "`$build_container" >/dev/null
   docker commit --change 'ENTRYPOINT ["/app/docker-entrypoint.sh"]' --change 'ENV ARIA2_CONF_PATH=/app/aria2.conf' "`$build_container" "`$image_name" >/dev/null
   docker rm -f "`$build_container" >/dev/null
 else
@@ -124,7 +133,8 @@ echo "http://127.0.0.1:8084 ok"
 echo "--- listener probe ---"
 docker exec "`$container_name" sh -lc 'ss -lnt 2>/dev/null || netstat -lnt 2>/dev/null || true'
 rm -rf "`$remote_dir"
-"@ | Set-Content -Encoding Ascii $RemoteScriptPath
+"@
+    Write-UnixTextFile $RemoteScriptPath $RemoteScriptContent
 
     Write-Host "Deploying container $ContainerName on $TargetHost"
     & scp -i $SshKey -P $TargetPort -o BatchMode=yes $RemoteScriptPath "$TargetUser@$TargetHost`:$RemoteDeployDir/remote-deploy.sh"
