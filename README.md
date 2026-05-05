@@ -99,6 +99,7 @@ TARGET_USER=root \
 HOST_PORT=8084 \
 HOST_CACHE_DIR=/fy/hls-accel/cache \
 HOST_HLS_DIR=/output/mydav/hls \
+CONFIG_FILE=./config.json \
 ./scripts/deploy-openwrt.sh
 ```
 
@@ -110,6 +111,7 @@ $env:TARGET_USER="root"
 $env:HOST_PORT="8084"
 $env:HOST_CACHE_DIR="/fy/hls-accel/cache"
 $env:HOST_HLS_DIR="/output/mydav/hls"
+$env:CONFIG_FILE=".\config.json"
 .\scripts\deploy-openwrt.ps1
 ```
 

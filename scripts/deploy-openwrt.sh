@@ -10,6 +10,7 @@ TARGET_PORT="${TARGET_PORT:-22}"
 SSH_KEY="${SSH_KEY:-$HOME/.ssh/id_rsa}"
 
 PACKAGE_DIR="${PACKAGE_DIR:-$ROOT_DIR/dist/hls-accel-linux-amd64-package}"
+CONFIG_FILE="${CONFIG_FILE:-$ROOT_DIR/config.json}"
 CONTAINER_NAME="${CONTAINER_NAME:-hls-accel}"
 IMAGE_NAME="${IMAGE_NAME:-hls-accel:latest}"
 HOST_CACHE_DIR="${HOST_CACHE_DIR:-/fy/hls-accel/cache}"
@@ -47,6 +48,12 @@ mkdir -p "$STAGE_DIR/web"
 cp "$PACKAGE_DIR/hls-accel" "$STAGE_DIR/hls-accel"
 cp -R "$PACKAGE_DIR/web/." "$STAGE_DIR/web/"
 cp "$ROOT_DIR/aria2.conf" "$STAGE_DIR/aria2.conf"
+if [ -f "$CONFIG_FILE" ]; then
+    cp "$CONFIG_FILE" "$STAGE_DIR/config.json"
+    echo "Using config file: $CONFIG_FILE"
+else
+    echo "Config file not found, skip config sync: $CONFIG_FILE"
+fi
 
 cat > "$STAGE_DIR/docker-entrypoint.sh" <<'EOF'
 #!/bin/sh
@@ -117,6 +124,7 @@ set -eu
 container_name='$CONTAINER_NAME'
 image_name='$IMAGE_NAME'
 remote_dir='$REMOTE_DEPLOY_DIR'
+has_config_file='$( [ -f "$STAGE_DIR/config.json" ] && echo 1 || echo 0 )'
 default_cache_dir='$HOST_CACHE_DIR'
 default_hls_dir='$HOST_HLS_DIR'
 default_port='$HOST_PORT'
@@ -191,6 +199,12 @@ else
 fi
 
 sleep 3
+
+if [ "\$has_config_file" = "1" ]; then
+    docker cp "\$remote_dir/config.json" "\$container_name:/app/config.json"
+    docker restart "\$container_name" >/dev/null
+    sleep 3
+fi
 
 echo "Container status:"
 docker ps --filter "name=^/\$container_name\$" --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}'

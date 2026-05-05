@@ -9,6 +9,7 @@ $TargetPort = if ($env:TARGET_PORT) { $env:TARGET_PORT } else { "22" }
 $SshKey = if ($env:SSH_KEY) { $env:SSH_KEY } else { Join-Path $HOME ".ssh/id_rsa" }
 
 $PackageDir = if ($env:PACKAGE_DIR) { $env:PACKAGE_DIR } else { Join-Path $RootDir "dist/hls-accel-linux-amd64-package" }
+$ConfigFile = if ($env:CONFIG_FILE) { $env:CONFIG_FILE } else { Join-Path $RootDir "config.json" }
 $ContainerName = if ($env:CONTAINER_NAME) { $env:CONTAINER_NAME } else { "hls-accel" }
 $ImageName = if ($env:IMAGE_NAME) { $env:IMAGE_NAME } else { "hls-accel:latest" }
 $HostCacheDir = if ($env:HOST_CACHE_DIR) { $env:HOST_CACHE_DIR } else { "/fy/hls-accel/cache" }
@@ -40,6 +41,13 @@ try {
     Copy-Item -LiteralPath (Join-Path $PackageDir "hls-accel") -Destination (Join-Path $StageDir "hls-accel")
     Copy-Item -LiteralPath (Join-Path $PackageDir "web/*") -Destination (Join-Path $StageDir "web") -Recurse
     Copy-Item -LiteralPath (Join-Path $RootDir "aria2.conf") -Destination (Join-Path $StageDir "aria2.conf")
+    if (Test-Path -LiteralPath $ConfigFile) {
+        Copy-Item -LiteralPath $ConfigFile -Destination (Join-Path $StageDir "config.json")
+        Write-Host "Using config file: $ConfigFile"
+    }
+    else {
+        Write-Host "Config file not found, skip config sync: $ConfigFile"
+    }
 
     Write-UnixTextFile (Join-Path $StageDir "docker-entrypoint.sh") @'
 #!/bin/sh
@@ -89,6 +97,7 @@ current_cache_dir="`$default_cache_dir"
 current_hls_dir="`$default_hls_dir"
 current_port="`$default_port"
 current_secret=""
+has_config_file='$(if (Test-Path -LiteralPath (Join-Path $StageDir "config.json")) { "1" } else { "0" })'
 if docker inspect "`$container_name" >/dev/null 2>&1; then
   detected_cache_dir=`$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/app/cache"}}{{.Source}}{{end}}{{end}}' "`$container_name" || true)
   detected_hls_dir=`$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/app/hls"}}{{.Source}}{{end}}{{end}}' "`$container_name" || true)
@@ -123,6 +132,11 @@ else
   docker run -d --name "`$container_name" --restart unless-stopped -p "`$current_port:8084" -v "`$current_cache_dir:/app/cache" -v "`$current_hls_dir:/app/hls" "`$image_name" >/dev/null
 fi
 sleep 3
+if [ "`$has_config_file" = "1" ]; then
+  docker cp "`$remote_dir/config.json" "`$container_name:/app/config.json"
+  docker restart "`$container_name" >/dev/null
+  sleep 3
+fi
 echo "Container status:"
 docker ps --filter "name=^/`$container_name`$" --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}'
 echo "--- logs ---"
