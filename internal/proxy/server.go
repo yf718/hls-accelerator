@@ -117,9 +117,17 @@ func (s *Server) startDownloadFromURL(addReq task.AddTaskRequest) error {
 
 	taskID := cache.GetTaskID(rawURL)
 	mediaPl := pl.(*m3u8.MediaPlaylist)
-	proxyBase := fmt.Sprintf("http://localhost:%d/proxy", config.GlobalConfig.ProxyPort)
+	proxyHost := strings.TrimSpace(config.GlobalConfig.ProxyHost)
+	if proxyHost == "" {
+		proxyHost = "localhost"
+	}
+	proxyBase := fmt.Sprintf("http://%s:%d/proxy", proxyHost, config.GlobalConfig.ProxyPort)
 	updated, items, total := playlist.RewriteVariant(mediaPl, proxyBase, taskID, base)
 	if err := cache.EnsureTaskDir(taskID); err != nil {
+		return err
+	}
+	m3u8FilePath, err := s.taskManager.SaveTaskM3U8File(taskName, updated)
+	if err != nil {
 		return err
 	}
 
@@ -133,6 +141,7 @@ func (s *Server) startDownloadFromURL(addReq task.AddTaskRequest) error {
 		UpdatedTime:    time.Now(),
 		Status:         task.TaskStatusParsing,
 		ProxiedContent: updated,
+		M3U8FilePath:   m3u8FilePath,
 	}
 	created, err := s.taskManager.CreateTaskWithItems(meta, items)
 	if err != nil {

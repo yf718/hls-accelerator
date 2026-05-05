@@ -454,7 +454,7 @@ func TestDeleteTaskAsyncCleansAria2ByDirImmediately(t *testing.T) {
 		t.Fatalf("WriteFile progress: %v", err)
 	}
 
-	m.deleteTaskAsync(meta.ID)
+	m.deleteTaskAsync(meta.ID, "")
 
 	if multicallCount != 1 {
 		t.Fatalf("system.multicall count = %d, want 1", multicallCount)

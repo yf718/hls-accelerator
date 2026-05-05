@@ -22,6 +22,7 @@ type TaskMetadata struct {
 	DoneItems          int        `json:"done_items"`
 	FailedItems        int        `json:"failed_items"`
 	OutputDir          string     `json:"output_dir"`
+	M3U8FilePath       string     `json:"m3u8_file_path"`
 	CreatedTime        time.Time  `json:"created_time"`
 	UpdatedTime        time.Time  `json:"updated_time"`
 	FinishedTime       *time.Time `json:"finished_time,omitempty"`
@@ -49,11 +50,11 @@ type ManifestIndexItem struct {
 }
 
 type TaskProgressFile struct {
-	TaskID             string            `json:"tid"`
-	Failed             []string          `json:"f,omitempty"`
-	DownloadedSegments int               `json:"seg_done,omitempty"`
-	DoneItems          int               `json:"done,omitempty"`
-	UpdatedAt          time.Time         `json:"u,omitempty"`
+	TaskID             string    `json:"tid"`
+	Failed             []string  `json:"f,omitempty"`
+	DownloadedSegments int       `json:"seg_done,omitempty"`
+	DoneItems          int       `json:"done,omitempty"`
+	UpdatedAt          time.Time `json:"u,omitempty"`
 }
 
 type TaskSummary struct {
@@ -70,6 +71,7 @@ type TaskSummary struct {
 	UpdatedTime        time.Time  `json:"updated_time"`
 	FinishedTime       *time.Time `json:"finished_time,omitempty"`
 	OutputDir          string     `json:"output_dir"`
+	M3U8FilePath       string     `json:"m3u8_file_path"`
 	Progress           float64    `json:"progress"`
 }
 

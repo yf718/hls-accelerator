@@ -3,8 +3,13 @@ package task
 import (
 	"database/sql"
 	"fmt"
+	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
+
+	"hls-accelerator/internal/config"
 )
 
 func isSQLiteUniqueConstraintError(err error) bool {
@@ -29,6 +34,7 @@ func (m *Manager) InitTable() error {
 		done_items INTEGER NOT NULL DEFAULT 0,
 		failed_items INTEGER NOT NULL DEFAULT 0,
 		output_dir TEXT NOT NULL DEFAULT '',
+		m3u8_file_path TEXT NOT NULL DEFAULT '',
 		created_time DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 		updated_time DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 		finished_time DATETIME,
@@ -56,9 +62,9 @@ func (m *Manager) CreateTask(meta TaskMetadata) error {
 	_, err := m.db.Exec(`
 	INSERT INTO tasks (
 		id, name, original_url, total_segments, downloaded_segments,
-		total_items, done_items, failed_items, output_dir,
+		total_items, done_items, failed_items, output_dir, m3u8_file_path,
 		created_time, updated_time, finished_time, status, proxied_content
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		meta.ID,
 		meta.Name,
@@ -69,6 +75,7 @@ func (m *Manager) CreateTask(meta TaskMetadata) error {
 		meta.DoneItems,
 		meta.FailedItems,
 		meta.OutputDir,
+		meta.M3U8FilePath,
 		nonZeroTime(meta.CreatedTime),
 		nonZeroTime(meta.UpdatedTime),
 		meta.FinishedTime,
@@ -94,7 +101,7 @@ func (m *Manager) GetTask(id string) (*TaskMetadata, error) {
 	var finished sql.NullTime
 	err := m.db.QueryRow(`
 	SELECT id, name, original_url, total_segments, downloaded_segments,
-		total_items, done_items, failed_items, output_dir,
+		total_items, done_items, failed_items, output_dir, m3u8_file_path,
 		created_time, updated_time, finished_time, status
 	FROM tasks
 	WHERE id = ?
@@ -108,6 +115,7 @@ func (m *Manager) GetTask(id string) (*TaskMetadata, error) {
 		&meta.DoneItems,
 		&meta.FailedItems,
 		&meta.OutputDir,
+		&meta.M3U8FilePath,
 		&meta.CreatedTime,
 		&meta.UpdatedTime,
 		&finished,
@@ -160,7 +168,7 @@ func (m *Manager) UpdateTaskStatus(taskID, status string) error {
 func (m *Manager) ListTasksDB() ([]TaskMetadata, error) {
 	rows, err := m.db.Query(`
 	SELECT id, name, original_url, total_segments, downloaded_segments,
-		total_items, done_items, failed_items, output_dir,
+		total_items, done_items, failed_items, output_dir, m3u8_file_path,
 		created_time, updated_time, finished_time, status
 	FROM tasks
 	WHERE status != ?
@@ -185,6 +193,7 @@ func (m *Manager) ListTasksDB() ([]TaskMetadata, error) {
 			&meta.DoneItems,
 			&meta.FailedItems,
 			&meta.OutputDir,
+			&meta.M3U8FilePath,
 			&meta.CreatedTime,
 			&meta.UpdatedTime,
 			&finished,
@@ -375,7 +384,7 @@ func (m *Manager) GetTasksByStatuses(statuses ...string) ([]TaskMetadata, error)
 	}
 	query := fmt.Sprintf(`
 	SELECT id, name, original_url, total_segments, downloaded_segments,
-		total_items, done_items, failed_items, output_dir,
+		total_items, done_items, failed_items, output_dir, m3u8_file_path,
 		created_time, updated_time, finished_time, status
 	FROM tasks
 	WHERE status IN (%s)
@@ -402,6 +411,7 @@ func (m *Manager) GetTasksByStatuses(statuses ...string) ([]TaskMetadata, error)
 			&meta.DoneItems,
 			&meta.FailedItems,
 			&meta.OutputDir,
+			&meta.M3U8FilePath,
 			&meta.CreatedTime,
 			&meta.UpdatedTime,
 			&finished,
@@ -429,4 +439,105 @@ func defaultTaskStatus(status string) string {
 		return TaskStatusPending
 	}
 	return status
+}
+
+func (m *Manager) SaveTaskM3U8File(taskName, content string) (string, error) {
+	storeDir := strings.TrimSpace(config.GlobalConfig.M3U8StoreDir)
+	if storeDir == "" || strings.TrimSpace(content) == "" {
+		return "", nil
+	}
+	info, err := os.Stat(storeDir)
+	if err != nil || !info.IsDir() {
+		return "", nil
+	}
+
+	baseName := sanitizeFileName(strings.TrimSpace(taskName))
+	if baseName == "" {
+		baseName = "Untitled Task"
+	}
+
+	usedSuffixes, err := m.listUsedM3U8Suffixes(storeDir, baseName)
+	if err != nil {
+		return "", err
+	}
+
+	suffix := 0
+	for {
+		if _, taken := usedSuffixes[suffix]; !taken {
+			break
+		}
+		suffix++
+	}
+
+	fileBase := baseName
+	if suffix > 0 {
+		fileBase = fmt.Sprintf("%s(%d)", baseName, suffix)
+	}
+	fullPath := filepath.Join(storeDir, fileBase+".m3u8")
+	if err := os.WriteFile(fullPath, []byte(content), 0644); err != nil {
+		return "", err
+	}
+	return fullPath, nil
+}
+
+func (m *Manager) listUsedM3U8Suffixes(storeDir, baseName string) (map[int]struct{}, error) {
+	prefixPath := filepath.Join(storeDir, baseName)
+	likePattern := prefixPath + "%.m3u8"
+
+	rows, err := m.db.Query(`
+	SELECT m3u8_file_path FROM tasks
+	WHERE status != ? AND m3u8_file_path LIKE ?
+	`, TaskStatusDeleted, likePattern)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := map[int]struct{}{}
+	for rows.Next() {
+		var fullPath string
+		if err := rows.Scan(&fullPath); err != nil {
+			return nil, err
+		}
+		name := strings.TrimSuffix(filepath.Base(fullPath), ".m3u8")
+		if name == baseName {
+			out[0] = struct{}{}
+			continue
+		}
+		if !strings.HasPrefix(name, baseName+"(") || !strings.HasSuffix(name, ")") {
+			continue
+		}
+		num := strings.TrimSuffix(strings.TrimPrefix(name, baseName+"("), ")")
+		n, err := strconv.Atoi(num)
+		if err != nil || n <= 0 {
+			continue
+		}
+		out[n] = struct{}{}
+	}
+	return out, rows.Err()
+}
+
+func sanitizeFileName(name string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return ""
+	}
+	replacer := strings.NewReplacer(
+		"/", "_",
+		"\\", "_",
+		":", "_",
+		"*", "_",
+		"?", "_",
+		"\"", "_",
+		"<", "_",
+		">", "_",
+		"|", "_",
+	)
+	name = replacer.Replace(name)
+	name = strings.TrimSpace(name)
+	name = strings.TrimRight(name, ".")
+	if name == "" {
+		return ""
+	}
+	return name
 }

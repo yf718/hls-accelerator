@@ -211,6 +211,7 @@ func summarizeTask(meta TaskMetadata) TaskSummary {
 		UpdatedTime:        meta.UpdatedTime,
 		FinishedTime:       meta.FinishedTime,
 		OutputDir:          meta.OutputDir,
+		M3U8FilePath:       meta.M3U8FilePath,
 		Progress:           progress,
 	}
 }
@@ -318,11 +319,11 @@ func (m *Manager) DeleteTask(taskID string) error {
 	m.runtimeMu.Lock()
 	delete(m.runtimes, taskID)
 	m.runtimeMu.Unlock()
-	go m.deleteTaskAsync(taskID)
+	go m.deleteTaskAsync(taskID, meta.M3U8FilePath)
 	return nil
 }
 
-func (m *Manager) deleteTaskAsync(taskID string) {
+func (m *Manager) deleteTaskAsync(taskID, m3u8FilePath string) {
 	m.acquireDeleteSlot()
 	defer m.releaseDeleteSlot()
 
@@ -334,6 +335,9 @@ func (m *Manager) deleteTaskAsync(taskID string) {
 	}
 	_ = os.Remove(taskProgressPath(taskID))
 	_ = os.RemoveAll(cache.GetTaskDir(taskID))
+	if strings.TrimSpace(m3u8FilePath) != "" {
+		_ = os.Remove(m3u8FilePath)
+	}
 	_ = m.DeleteTaskDB(taskID)
 
 	m.runtimeMu.Lock()
