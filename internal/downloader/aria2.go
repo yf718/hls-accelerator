@@ -2,6 +2,7 @@ package downloader
 
 import (
 	"bytes"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"hls-accelerator/internal/config"
@@ -20,7 +21,12 @@ func NewClient() *Aria2Client {
 	return &Aria2Client{
 		RPCUrl: config.GlobalConfig.Aria2RPCUrl,
 		Secret: config.GlobalConfig.Aria2Secret,
-		Client: &http.Client{Timeout: 10 * time.Second},
+		Client: &http.Client{
+			Timeout: 10 * time.Second,
+			Transport: &http.Transport{
+				TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+			},
+		},
 	}
 }
 

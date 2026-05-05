@@ -73,6 +73,36 @@ brew install aria2
    go build -o hls-accel cmd/server/main.go
    ```
 
+### 3. Deploy An Existing Linux Package To OpenWrt Docker
+
+If `dist/hls-accel-linux-amd64-package` already exists, publish it directly without rebuilding:
+
+```bash
+./scripts/deploy-openwrt.sh
+```
+
+Default deployment target:
+
+- host: `192.168.31.2`
+- user: `root`
+- package dir: `dist/hls-accel-linux-amd64-package`
+- container: `hls-accel`
+- image: `hls-accel:latest`
+- cache bind: `/fy/hls-accel/cache:/app/cache`
+- port publish: `8084:8084`
+
+Common overrides:
+
+```bash
+TARGET_HOST=192.168.31.2 \
+TARGET_USER=root \
+HOST_PORT=8084 \
+HOST_CACHE_DIR=/fy/hls-accel/cache \
+./scripts/deploy-openwrt.sh
+```
+
+The deploy script uploads the packaged binary and `web` assets, starts aria2 via a dedicated `/app/aria2.conf`, and prefers patching the existing remote image to avoid Docker Hub pulls on OpenWrt.
+
 ## Usage
 
 ### Step 1: Start Aria2 RPC Server

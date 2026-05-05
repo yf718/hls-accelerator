@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"crypto/tls"
 	"fmt"
 	"io"
 	"log"
@@ -39,6 +40,9 @@ func NewServer() (*Server, error) {
 		addr: fmt.Sprintf(":%d", config.GlobalConfig.ProxyPort),
 		client: &http.Client{
 			Timeout: 30 * time.Second,
+			Transport: &http.Transport{
+				TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+			},
 		},
 		taskManager: tm,
 	}, nil
