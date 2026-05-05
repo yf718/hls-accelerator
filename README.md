@@ -98,7 +98,19 @@ TARGET_HOST=192.168.31.2 \
 TARGET_USER=root \
 HOST_PORT=8084 \
 HOST_CACHE_DIR=/fy/hls-accel/cache \
+HOST_HLS_DIR=/output/mydav/hls \
 ./scripts/deploy-openwrt.sh
+```
+
+PowerShell deployment (Windows):
+
+```powershell
+$env:TARGET_HOST="192.168.31.2"
+$env:TARGET_USER="root"
+$env:HOST_PORT="8084"
+$env:HOST_CACHE_DIR="/fy/hls-accel/cache"
+$env:HOST_HLS_DIR="/output/mydav/hls"
+.\scripts\deploy-openwrt.ps1
 ```
 
 The deploy script uploads the packaged binary and `web` assets, starts aria2 via a dedicated `/app/aria2.conf`, and prefers patching the existing remote image to avoid Docker Hub pulls on OpenWrt.

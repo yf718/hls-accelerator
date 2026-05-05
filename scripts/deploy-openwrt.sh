@@ -13,6 +13,7 @@ PACKAGE_DIR="${PACKAGE_DIR:-$ROOT_DIR/dist/hls-accel-linux-amd64-package}"
 CONTAINER_NAME="${CONTAINER_NAME:-hls-accel}"
 IMAGE_NAME="${IMAGE_NAME:-hls-accel:latest}"
 HOST_CACHE_DIR="${HOST_CACHE_DIR:-/fy/hls-accel/cache}"
+HOST_HLS_DIR="${HOST_HLS_DIR:-/output/mydav/hls}"
 HOST_PORT="${HOST_PORT:-8084}"
 REMOTE_BASE_DIR="${REMOTE_BASE_DIR:-/tmp}"
 REMOTE_DEPLOY_DIR="$REMOTE_BASE_DIR/${CONTAINER_NAME}-deploy-$$"
@@ -117,19 +118,25 @@ container_name='$CONTAINER_NAME'
 image_name='$IMAGE_NAME'
 remote_dir='$REMOTE_DEPLOY_DIR'
 default_cache_dir='$HOST_CACHE_DIR'
+default_hls_dir='$HOST_HLS_DIR'
 default_port='$HOST_PORT'
 
 current_cache_dir="\$default_cache_dir"
+current_hls_dir="\$default_hls_dir"
 current_port="\$default_port"
 current_secret=""
 
 if docker inspect "\$container_name" >/dev/null 2>&1; then
     detected_cache_dir=\$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/app/cache"}}{{.Source}}{{end}}{{end}}' "\$container_name" || true)
+    detected_hls_dir=\$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/app/hls"}}{{.Source}}{{end}}{{end}}' "\$container_name" || true)
     detected_port=\$(docker inspect -f '{{with index (index .HostConfig.PortBindings "8084/tcp") 0}}{{.HostPort}}{{end}}' "\$container_name" || true)
     detected_secret=\$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "\$container_name" | grep '^ARIA2_SECRET=' | head -n 1 | cut -d= -f2- || true)
 
     if [ -n "\$detected_cache_dir" ]; then
         current_cache_dir="\$detected_cache_dir"
+    fi
+    if [ -n "\$detected_hls_dir" ]; then
+        current_hls_dir="\$detected_hls_dir"
     fi
     if [ -n "\$detected_port" ]; then
         current_port="\$detected_port"
@@ -140,6 +147,7 @@ if docker inspect "\$container_name" >/dev/null 2>&1; then
 fi
 
 mkdir -p "\$current_cache_dir"
+mkdir -p "\$current_hls_dir"
 
 if docker image inspect "\$image_name" >/dev/null 2>&1; then
     build_container="\${container_name}-build"
@@ -166,6 +174,7 @@ if [ -n "\$current_secret" ]; then
         --restart unless-stopped \
         -p "\$current_port:8084" \
         -v "\$current_cache_dir:/app/cache" \
+        -v "\$current_hls_dir:/app/hls" \
         -e "ARIA2_SECRET=\$current_secret" \
         "\$image_name" >/dev/null
 else
@@ -174,6 +183,7 @@ else
         --restart unless-stopped \
         -p "\$current_port:8084" \
         -v "\$current_cache_dir:/app/cache" \
+        -v "\$current_hls_dir:/app/hls" \
         "\$image_name" >/dev/null
 fi
 
